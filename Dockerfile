@@ -7,7 +7,9 @@ LABEL maintainer="techtrans <no-reply@example.com>"
 # Environment
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PORT=8080
+    PORT=8080 \
+    GOOGLE_CLOUD_PROJECT="" \
+    LOG_TO_CLOUD=true
 
 WORKDIR /app
 
@@ -28,7 +30,7 @@ COPY requirements.txt /app/requirements.txt
 # Install Python dependencies (include gunicorn for production)
 RUN pip install --upgrade pip setuptools wheel \
  && pip install --no-cache-dir -r /app/requirements.txt \
- && pip install --no-cache-dir gunicorn
+ && pip install --no-cache-dir gunicorn google-cloud-logging
 
 # Copy application code
 COPY . /app
@@ -43,4 +45,5 @@ EXPOSE $PORT
 
 # Use Gunicorn to run the Flask app factory. Cloud Run sets $PORT; default 8080 defined above.
 # We call the factory directly using the app:create_app format
-CMD exec gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 0 "app:create_app()"
+# Configure gunicorn logging for Cloud Logging compatibility
+CMD exec gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 0 --access-logfile - --error-logfile - --log-level info "app:create_app()"
