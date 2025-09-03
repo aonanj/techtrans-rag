@@ -39,8 +39,8 @@ RUN useradd --create-home --no-log-init appuser \
 
 USER appuser
 
-EXPOSE 8080
+EXPOSE $PORT
 
 # Use Gunicorn to run the Flask app factory. Cloud Run sets $PORT; default 8080 defined above.
-# We call the factory directly: app:create_app()
-CMD ["gunicorn", "app:create_app()", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "4", "--timeout", "800"]
+# We call the factory directly using the app:create_app format
+CMD exec gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 0 "app:create_app()"
