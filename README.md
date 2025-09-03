@@ -138,10 +138,4 @@ Contributions welcome. Please open issues or PRs describing bug fixes, improveme
 
 ## License
 
-This repository does not include a license file. Add one (e.g., MIT) if you intend to publish.
-
----
-Generated README based on the repository layout and code. If you'd like, I can also:
-- Add a `requirements.txt` pinned to currently used packages.
-- Add a quick `docker-compose` dev recipe.
-```
+MIT License. Copyright (c) 2025 Alex S. Osterlind. See `LICENSE`.
