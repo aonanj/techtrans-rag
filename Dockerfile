@@ -43,4 +43,4 @@ EXPOSE 8080
 
 # Use Gunicorn to run the Flask app factory. Cloud Run sets $PORT; default 8080 defined above.
 # We call the factory directly: app:create_app()
-CMD ["gunicorn", "app:create_app()", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "4", "--timeout", "120"]
+CMD ["gunicorn", "app:create_app()", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "4", "--timeout", "800"]
