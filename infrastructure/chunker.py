@@ -31,7 +31,7 @@ import json
 from pathlib import Path
 
 from .logger import get_logger
-from vector_search import upsert_datapoints
+from .vector_search import upsert_datapoints
 from .embeddings import generate_embeddings
 
 
