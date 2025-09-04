@@ -4,12 +4,13 @@ FROM python:3.13-slim
 # Metadata
 LABEL maintainer="techtrans <no-reply@example.com>"
 
-# Environment
+# Environment - Optimized for Cloud Run and Cloud Logging
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8080 \
+    LOG_TO_CLOUD=true \
     GOOGLE_CLOUD_PROJECT="" \
-    LOG_TO_CLOUD=true
+    PYTHONPATH=/app
 
 WORKDIR /app
 
@@ -44,6 +45,15 @@ USER appuser
 EXPOSE $PORT
 
 # Use Gunicorn to run the Flask app factory. Cloud Run sets $PORT; default 8080 defined above.
-# We call the factory directly using the app:create_app format
-# Configure gunicorn logging for Cloud Logging compatibility
-CMD exec gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 0 --access-logfile - --error-logfile - --log-level info "app:create_app()"
+# Optimized for Cloud Logging Only - all logs go to stdout/stderr for Cloud Logging capture
+# Disable file logging entirely and use structured logging format
+CMD exec gunicorn --bind 0.0.0.0:$PORT \
+    --workers 1 \
+    --threads 8 \
+    --timeout 0 \
+    --access-logfile - \
+    --error-logfile - \
+    --access-logformat '{"timestamp": "%(t)s", "method": "%(m)s", "url": "%(U)s", "query": "%(q)s", "status": %(s)s, "bytes": %(b)s, "duration": %(D)s, "user_agent": "%(a)s"}' \
+    --log-level info \
+    --capture-output \
+    "app:create_app()"

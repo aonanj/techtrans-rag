@@ -1,0 +1,60 @@
+# .gcloudignore for Cloud Run deployment
+# Exclude files that don't need to be uploaded for the build
+
+# Git files
+.git/
+.gitignore
+
+# Python cache and virtual environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+venv/
+env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Local development files
+.env
+.env.local
+*.log
+techtrans.log
+
+# Documentation
+README.md
+*.md
+
+# Test files
+tests/
+test_*.py
+*_test.py
+
+# Local development scripts
+scripts/local_*
+
+# MacOS files
+.DS_Store
