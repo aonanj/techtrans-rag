@@ -1,3 +1,4 @@
+// ...existing code...
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -238,6 +239,7 @@
             border-radius: 10px;
             margin-top: 20px;
             text-align: center;
+            word-break: break-word;
         }
 
         .upload-result.success {
@@ -354,8 +356,8 @@
             uploadResult.style.display = 'none';
         });
 
-        // Form submission handler
-        uploadForm.addEventListener('submit', async (e) => {
+        // Form submission handler — use XMLHttpRequest to support upload progress
+        uploadForm.addEventListener('submit', (e) => {
             e.preventDefault();
             
             if (!selectedFileObj) {
@@ -363,55 +365,80 @@
                 return;
             }
 
-            // Disable button and show progress
             uploadButton.disabled = true;
             progressContainer.classList.add('visible');
             uploadResult.style.display = 'none';
+            progressBar.style.width = '0%';
+            progressText.textContent = 'Starting upload...';
 
-            try {
+            const formData = new FormData();
+            formData.append('file', selectedFileObj);
 
-                formData = new FormData();
-                formData.append('file', selectedFileObj);
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/upload', true);
 
-                let fakeProgress = 0;
-                const fakeInterval = setInterval(() => {
-                    if (fakeProgress < 90) {
-                        fakeProgress += 5;
-                        progressBar.style.width = fakeProgress + '%';
-                        progressText.textContent = `Uploading... ${fakeProgress}%`;
-                    }
-                }, 120);
-                
-                const response = await fetch('/api/upload', {
-                    method: 'POST',
-                    body: formData,
-                    onUploadProgress: (progressEvent) => {
-                        const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-                        progressBar.style.width = percentCompleted + '%';
-                        progressText.textContent = `Uploading... ${percentCompleted}%`;
-                    }
-                });
+            // Upload progress
+            xhr.upload.onprogress = function(event) {
+                if (event.lengthComputable) {
+                    const percent = Math.round((event.loaded / event.total) * 100);
+                    progressBar.style.width = percent + '%';
+                    progressText.textContent = `Uploading... ${percent}%`;
+                }
+            };
 
-                if (!response.ok) {
-                    throw new Error(`Upload failed: ${response.statusText}`);
+            xhr.onload = function() {
+                uploadButton.disabled = false;
+                // Attempt to parse JSON response from server
+                let responseJson = null;
+                try {
+                    responseJson = JSON.parse(xhr.responseText || '{}');
+                } catch (err) {
+                    showResult('Upload failed: invalid server response.', 'error');
+                    progressContainer.classList.remove('visible');
+                    return;
                 }
 
-                const result = await response.json();
-                // Complete progress
-                progressBar.style.width = '100%';
-                progressText.textContent = 'Upload complete';
-                showResult('Document uploaded successfully!', 'success');
-                clearFileSelection();
-
-            } catch (error) {
-                console.error('Upload error:', error);
-                showResult(`Upload failed: ${error.message}`, 'error');
-            } finally {
-                if (typeof fakeInterval !== 'undefined') clearInterval(fakeInterval);
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    progressBar.style.width = '100%';
+                    progressText.textContent = 'Upload complete';
+                    // Show returned metadata if present
+                    const docId = responseJson.doc_id ? `Doc ID: ${responseJson.doc_id}` : '';
+                    const sha = responseJson.sha256 ? `SHA256: ${responseJson.sha256}` : '';
+                    const title = responseJson.title ? `Title: ${responseJson.title}` : '';
+                    const msgParts = ['Document uploaded successfully!', docId, title, sha].filter(Boolean);
+                    showResult(msgParts.join(' — '), 'success');
+                    // Keep note about indexing in case embeddings are generated async
+                    const indexingNote = document.createElement('div');
+                    indexingNote.style.marginTop = '8px';
+                    indexingNote.style.fontSize = '0.85rem';
+                    indexingNote.style.color = '#ccc';
+                    indexingNote.textContent = 'Embeddings/indexing may continue in the background.';
+                    uploadResult.appendChild(indexingNote);
+                    clearFileSelection();
+                } else {
+                    // Try to show server error message
+                    const errMsg = responseJson && responseJson.error ? responseJson.error : xhr.statusText || 'Upload failed';
+                    showResult(`Upload failed: ${errMsg}`, 'error');
+                }
                 progressContainer.classList.remove('visible');
+            };
+
+            xhr.onerror = function() {
                 uploadButton.disabled = false;
-                progressBar.style.width = '0%';
-            }
+                showResult('Upload failed: network error.', 'error');
+                progressContainer.classList.remove('visible');
+            };
+
+            xhr.ontimeout = function() {
+                uploadButton.disabled = false;
+                showResult('Upload timed out.', 'error');
+                progressContainer.classList.remove('visible');
+            };
+
+            // Optional timeout (ms) — adjust or remove as needed
+            xhr.timeout = 120000; // 2 minutes
+
+            xhr.send(formData);
         });
 
         function handleFileSelect(e) {
@@ -429,10 +456,19 @@
         }
 
         function handleFile(file) {
-            // Validate file type
-            const allowedTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain'];
-            if (!allowedTypes.includes(file.type)) {
-                showResult('Please select a .pdf, .txt, or .docx file.', 'error');
+            // Validate file type by MIME or extension fallback
+            const allowedTypes = [
+                'application/pdf',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'application/msword',
+                'text/plain'
+            ];
+
+            const ext = (file.name || '').split('.').pop().toLowerCase();
+            const allowedExt = ['pdf', 'docx', 'doc', 'txt'];
+
+            if (!allowedTypes.includes(file.type) && !allowedExt.includes(ext)) {
+                showResult('Please select a .pdf, .txt, .doc, or .docx file.', 'error');
                 return;
             }
 
@@ -465,4 +501,3 @@
         }
     </script>
 </body>
-</html>

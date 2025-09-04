@@ -61,7 +61,12 @@ def _upload_dirs():
 
 @api_bp.route("/upload", methods=["POST"])
 def add_doc():
-    """Upload one document, extract text, persist metadata in Postgres, and schedule chunking."""
+    """Upload one document, extract text, persist metadata in Postgres, and schedule chunking.
+
+    Optional form fields:
+      doc_type: str
+      jurisdiction: str
+    """
     if "file" not in request.files:
         return jsonify({"error": "No file part"}), 400
     file = request.files["file"]
@@ -69,6 +74,10 @@ def add_doc():
         return jsonify({"error": "No selected file"}), 400
     if not allowed_file(file.filename):
         return jsonify({"error": "Unsupported file type"}), 400
+
+    # Optional metadata fields (multipart/form-data text inputs)
+    doc_type = request.form.get("doc_type") or None
+    jurisdiction = request.form.get("jurisdiction") or None
 
     raw_dir, clean_dir, meta_dir = _upload_dirs()
     filename = secure_filename(file.filename)
@@ -93,10 +102,16 @@ def add_doc():
     content_sha = sha256_text(text)
     doc = get_document_by_sha(content_sha)
     if not doc:
-        # add_document returns the Document class on success, not an instance
-        add_document(sha256=content_sha, title=title, source_path=raw_path)
-        # so we must re-fetch
+        # Insert new
+        add_document(sha256=content_sha, title=title, source_path=raw_path, doc_type=doc_type, jurisdiction=jurisdiction)
         doc = get_document_by_sha(content_sha)
+    else:
+        # Enrich existing if metadata blank
+        try:
+            add_document(sha256=content_sha, doc_type=doc_type, jurisdiction=jurisdiction)
+            doc = get_document_by_sha(content_sha)
+        except Exception:
+            pass
 
     if not doc:
         logger.error("Failed to create or retrieve document for SHA: %s", content_sha)
@@ -146,7 +161,14 @@ def add_doc():
         # Do not fail the upload if chunking fails. The worker can retry.
         pass
 
-    return jsonify({"message": "ok", "doc_id": doc_id_val, "sha256": content_sha, "title": title}), 200
+    return jsonify({
+        "message": "ok",
+        "doc_id": doc_id_val,
+        "sha256": content_sha,
+        "title": title,
+        "doc_type": getattr(doc, "doc_type", None),
+        "jurisdiction": getattr(doc, "jurisdiction", None)
+    }), 200
 
 
 @api_bp.route("/chunks", methods=["GET"])
@@ -209,13 +231,19 @@ def generate_embeddings_endpoint():
 
 @api_bp.route("/query", methods=["POST"])
 def query():
-    """Placeholder RAG query that delegates ANN to Vertex AI Vector Search if available.
+    """Vector search against chunk embeddings (Vertex AI backend).
 
-    Request JSON: { "query": str, "top_k": int, "filters": {...} }
+    Request JSON:
+      query: str (required)
+      top_k: int (optional, default 5)
+      filters: { doc_type?: str, jurisdiction?: str } (optional)
     """
     payload = request.get_json(force=True) or {}
     question = payload.get("query")
     top_k = int(payload.get("top_k", 5))
+    filters = payload.get("filters") or {}
+    f_doc_type = (filters.get("doc_type") or '').strip() if isinstance(filters, dict) else ''
+    f_jurisdiction = (filters.get("jurisdiction") or '').strip() if isinstance(filters, dict) else ''
     if not question:
         return jsonify({"error": "query required"}), 400
 
@@ -233,7 +261,6 @@ def query():
     approx_count = payload.get("approx_count")
 
     try:
-        # Prefer advanced function for approximate neighbor tuning
         neighbors = find_nearest_neighbors_advanced(
             project_id=str(project_id),
             location=str(location),
@@ -244,7 +271,7 @@ def query():
             approx_multiplier=float(approx_multiplier) if approx_multiplier is not None else None,
             approx_count=int(approx_count) if approx_count is not None else None,
         )
-        if not neighbors:  # Fallback to legacy if empty (e.g., advanced client unavailable)
+        if not neighbors:
             neighbors = find_nearest_neighbors(
                 project_id=str(project_id),
                 location=str(location),
@@ -255,12 +282,23 @@ def query():
             )
 
         if not neighbors:
-            return jsonify({"query": question, "results": []}), 200
+            return jsonify({"query": question, "results": [], "filters": filters}), 200
 
         neighbor_ids = [int(n_id) for n_id, _ in neighbors]
         chunks = get_chunks_by_ids(neighbor_ids)
-        # Create a mapping from chunk_id to text (normalize key to int)
-        chunk_map = {int(getattr(chunk, "chunk_id")): getattr(chunk, "text", "") for chunk in chunks}
+        chunk_map = {}
+        meta_map = {}
+        for chunk in chunks:
+            cid = int(getattr(chunk, "chunk_id"))
+            chunk_map[cid] = getattr(chunk, "text", "")
+            doc_obj = getattr(chunk, "document", None)
+            if doc_obj is not None:
+                meta_map[cid] = {
+                    "doc_id": getattr(doc_obj, "doc_id", None),
+                    "doc_type": getattr(doc_obj, "doc_type", None),
+                    "jurisdiction": getattr(doc_obj, "jurisdiction", None),
+                    "title": getattr(doc_obj, "title", None),
+                }
 
         results = []
         for n_id, dist in neighbors:
@@ -268,14 +306,19 @@ def query():
                 cid = int(n_id)
             except (TypeError, ValueError):
                 continue
+            meta = meta_map.get(cid, {})
+            if f_doc_type and (meta.get("doc_type") or '').lower() != f_doc_type.lower():
+                continue
+            if f_jurisdiction and (meta.get("jurisdiction") or '').lower() != f_jurisdiction.lower():
+                continue
             results.append({
                 "chunk_id": cid,
                 "text": chunk_map.get(cid, ""),
                 "distance": dist,
+                **meta
             })
 
-        return jsonify({"query": question, "results": results}), 200
-
+        return jsonify({"query": question, "results": results, "filters": filters}), 200
     except Exception as e:
         logger.exception("Vector search query failed: %s", e)
         return jsonify({"error": "Failed to execute vector search."}), 500

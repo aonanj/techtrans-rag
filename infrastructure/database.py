@@ -29,7 +29,7 @@ from datetime import datetime
 from sqlalchemy import (
     create_engine, Column, Integer, String, Text, DateTime, ForeignKey, LargeBinary, Index, text
 )
-from sqlalchemy.orm import declarative_base, relationship, sessionmaker, scoped_session
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker, scoped_session, joinedload
 from flask import g
 from google.cloud.sql.connector import Connector, IPTypes
 
@@ -107,6 +107,9 @@ class Document(Base):
     source_path = Column(Text, nullable=True)
     sha256 = Column(String(64), nullable=False, unique=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # Optional metadata filters
+    doc_type = Column(String(128), nullable=True)
+    jurisdiction = Column(String(64), nullable=True)
 
     chunks = relationship("Chunk", cascade="all, delete-orphan", back_populates="document")
 
@@ -145,9 +148,25 @@ class Embedding(Base):
 # Public API
 # ---------------------------------------------------------------------------
 def init_db():
-    """Create tables if they do not exist."""
+    """Create tables if they do not exist and ensure new columns are present.
+
+    Lightweight migration: if doc_type / jurisdiction columns are missing on existing
+    deployments, add them with ALTER TABLE.
+    """
     engine = _ensure_engine()
     Base.metadata.create_all(engine)
+    # Migration for new columns (Postgres specific via information_schema)
+    try:
+        with engine.connect() as conn:
+            res = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='documents'"))
+            existing = {r[0] for r in res}
+            if "doc_type" not in existing:
+                conn.execute(text("ALTER TABLE documents ADD COLUMN doc_type VARCHAR(128) NULL"))
+            if "jurisdiction" not in existing:
+                conn.execute(text("ALTER TABLE documents ADD COLUMN jurisdiction VARCHAR(64) NULL"))
+    except Exception:
+        # Non-fatal; log suppressed here to avoid logger import. Upstream caller can log if needed.
+        pass
 
 def get_session():
     _ensure_engine()
@@ -175,13 +194,26 @@ def session_scope():
         session.close()
 
 # --------------- CRUD ---------------
-def add_document(*, sha256, title=None, source_path=None):
-    """Insert a document if absent; return Document."""
+def add_document(*, sha256, title=None, source_path=None, doc_type=None, jurisdiction=None):
+    """Insert a document if absent; return Document.
+
+    If the document already exists, optionally update metadata fields if they are currently null
+    and new values are supplied (non-breaking enrichment behavior).
+    """
     with session_scope() as s:
         doc = s.query(Document).filter_by(sha256=sha256).one_or_none()
         if doc:
+            updated = False
+            if doc_type and not getattr(doc, "doc_type", None):
+                doc.doc_type = doc_type
+                updated = True
+            if jurisdiction and not getattr(doc, "jurisdiction", None):
+                doc.jurisdiction = jurisdiction
+                updated = True
+            if updated:
+                s.flush()
             return doc
-        doc = Document(sha256=sha256, title=title, source_path=source_path)
+        doc = Document(sha256=sha256, title=title, source_path=source_path, doc_type=doc_type, jurisdiction=jurisdiction)
         s.add(doc)
         s.flush()
         return doc
@@ -228,7 +260,13 @@ def get_chunks_for_doc(doc_id: int):
 
 def get_chunks_by_ids(chunk_ids: list[int]):
     with session_scope() as s:
-        return s.query(Chunk).filter(Chunk.chunk_id.in_(chunk_ids)).all()
+        # joinedload to pre-fetch related Document for filter display without extra queries
+        return (
+            s.query(Chunk)
+            .options(joinedload(Chunk.document))
+            .filter(Chunk.chunk_id.in_(chunk_ids))
+            .all()
+        )
 
 def get_embedding_for_chunk(chunk_id: int):
     with session_scope() as s:
