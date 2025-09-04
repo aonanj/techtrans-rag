@@ -409,3 +409,134 @@ def query():
 		},
 		'total_candidates': len(rows)
 	}), 200
+
+@api_bp.route('/manifest', methods=['GET'])
+def get_manifest():
+    """
+    Returns the contents of manifest.jsonl
+    """
+    metadata_folder = os.getenv('METADATA_FOLDER', None) or os.path.join(current_app.root_path, '.data/metadata')
+    manifest_file = os.path.join(metadata_folder, 'manifest.jsonl')
+    
+    if not os.path.isfile(manifest_file):
+        return jsonify([])
+
+    manifest_data = []
+    try:
+        with open(manifest_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                manifest_data.append(json.loads(line))
+    except Exception as e:
+        logger.error(f"Failed to read manifest file: {e}")
+        return jsonify({"error": "Failed to read manifest file"}), 500
+    
+    return jsonify(manifest_data)
+
+@api_bp.route('/manifest', methods=['POST'])
+def update_manifest():
+    """
+    Updates manifest.jsonl with new data and propagates changes to chunks.jsonl.
+    """
+    if not request.is_json:
+        return jsonify({"error": "Expected application/json"}), 400
+    
+    new_manifest_data = request.get_json()
+    
+    metadata_folder = os.getenv('METADATA_FOLDER', None) or os.path.join(current_app.root_path, '.data/metadata')
+    manifest_file = os.path.join(metadata_folder, 'manifest.jsonl')
+    chunks_file = os.path.join(metadata_folder, 'chunks.jsonl')
+
+    # Propagate changes to chunks.jsonl
+    try:
+        # Read chunks data
+        if os.path.isfile(chunks_file):
+            with open(chunks_file, 'r', encoding='utf-8') as f:
+                chunks_data = [json.loads(line) for line in f]
+        else:
+            chunks_data = []
+
+        # Create a map of manifest metadata to propagate
+        manifest_map = {
+            record['doc_id']: {
+                'doc_type': record.get('doc_type'),
+                'party_role': record.get('party_role'),
+                'jurisdiction': record.get('jurisdiction'),
+                'governing_law': record.get('governing_law'),
+                'industry': record.get('industry')
+            }
+            for record in new_manifest_data if 'doc_id' in record
+        }
+
+        # Update chunks with new metadata
+        for chunk in chunks_data:
+            if 'doc_id' in chunk and chunk['doc_id'] in manifest_map:
+                if 'metadata' not in chunk:
+                    chunk['metadata'] = {}
+                chunk['metadata'].update(manifest_map[chunk['doc_id']])
+
+        # Write updated chunks data back
+        with open(chunks_file, 'w', encoding='utf-8') as f:
+            for chunk in chunks_data:
+                f.write(json.dumps(chunk, ensure_ascii=False) + "\n")
+        logger.info("Propagated manifest changes to chunks.jsonl")
+
+    except Exception as e:
+        logger.error(f"Failed to propagate manifest changes to chunks.jsonl: {e}")
+        # Decide if you want to stop the whole process or just log the error
+        # For now, we'll log and continue to update the manifest
+
+    # Update manifest.jsonl
+    try:
+        with open(manifest_file, 'w', encoding='utf-8') as f:
+            for record in new_manifest_data:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.error(f"Failed to write to manifest file: {e}")
+        return jsonify({"error": "Failed to write to manifest file"}), 500
+        
+    return jsonify({"message": "Manifest updated successfully and changes propagated"}), 200
+
+@api_bp.route('/chunks', methods=['GET'])
+def get_chunks():
+    """
+    Returns the contents of chunks.jsonl
+    """
+    metadata_folder = os.getenv('METADATA_FOLDER', None) or os.path.join(current_app.root_path, '.data/metadata')
+    chunks_file = os.path.join(metadata_folder, 'chunks.jsonl')
+    
+    if not os.path.isfile(chunks_file):
+        return jsonify([])
+
+    chunks_data = []
+    try:
+        with open(chunks_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                chunks_data.append(json.loads(line))
+    except Exception as e:
+        logger.error(f"Failed to read chunks file: {e}")
+        return jsonify({"error": "Failed to read chunks file"}), 500
+    
+    return jsonify(chunks_data)
+
+@api_bp.route('/chunks', methods=['POST'])
+def update_chunks():
+    """
+    Updates chunks.jsonl with new data.
+    """
+    if not request.is_json:
+        return jsonify({"error": "Expected application/json"}), 400
+    
+    new_data = request.get_json()
+    
+    metadata_folder = os.getenv('METADATA_FOLDER', None) or os.path.join(current_app.root_path, '.data/metadata')
+    chunks_file = os.path.join(metadata_folder, 'chunks.jsonl')
+
+    try:
+        with open(chunks_file, 'w', encoding='utf-8') as f:
+            for record in new_data:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.error(f"Failed to write to chunks file: {e}")
+        return jsonify({"error": "Failed to write to chunks file"}), 500
+        
+    return jsonify({"message": "Chunks updated successfully"}), 200

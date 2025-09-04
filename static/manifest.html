@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manifest</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Rounded', 'SF Pro Display', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #001122;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            color: #fff;
+        }
+        h1 {
+            color: #fff;
+            font-size: 2.5rem;
+            font-weight: 500;
+            text-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
+            text-decoration: underline;
+            margin-bottom: 5px;
+        }
+        h3 {
+            color: #ccc;
+            font-size: 0.85rem;
+            font-weight: 400;
+            font-style: italic;
+            margin: 10px;
+            margin-bottom: 20px;
+        }
+        .local-link {
+            color: #87CEFA;
+            text-decoration: none;
+        }
+        .local-link:hover { 
+            color: powderblue;
+            text-decoration: underline;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #333;
+            border-radius: 20px;
+            box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+        }
+        th, td {
+            border: 1px solid #444;
+            padding: 12px 15px;
+            text-align: left;
+        }
+        th {
+            background-color: #6495ED;
+            color: white;
+            font-weight: 500;
+        }
+        tr {
+            border-bottom: 1px solid #444;
+        }
+        tr:nth-of-type(even) {
+            background-color: #2c2c2c;
+        }
+        td.editable {
+            cursor: pointer;
+        }
+        td.editable:hover {
+            background-color: #454545;
+        }
+        .editing {
+            background-color: #555 !important;
+        }
+        input {
+            background: #555;
+            color: #fff;
+            border: 1px solid #666;
+            padding: 5px;
+            width: 100%;
+        }
+        .buttons {
+            margin-top: 20px;
+        }
+        button {
+            background-color: #87CEFA;
+            color: #001122;
+            border: none;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 12px;
+            font-weight: 500;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #6caddb;
+        }
+        #cancel-btn {
+            background-color: #ccc;
+        }
+        #cancel-btn:hover {
+            background-color: #b0b0b0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Current Manifest Metadata</h1>
+    <h3>Select a cell to edit the value. Confirm writes changes to manifest.jsonl. Changes are not persisted to the database. Visit <a href="/db-status" class="local-link" target="_blank">/db-status</a> to write changes to app.db.</h3>
+    <div id="manifest-table"></div>
+    <div class="buttons">
+        <button id="confirm-btn">Confirm</button>
+        <button id="cancel-btn">Cancel</button>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            let originalData = [];
+            let currentData = [];
+            const tableContainer = document.getElementById('manifest-table');
+            const confirmBtn = document.getElementById('confirm-btn');
+            const cancelBtn = document.getElementById('cancel-btn');
+
+            function renderTable() {
+                if (!currentData.length) {
+                    tableContainer.innerHTML = '<p>No manifest data found.</p>';
+                    return;
+                }
+
+                const headers = Object.keys(currentData[0]).filter(header => header !== 'hash_sha256');
+                let tableHtml = '<table><thead><tr>';
+                headers.forEach(header => {
+                    tableHtml += `<th>${header}</th>`;
+                });
+                tableHtml += '</tr></thead><tbody>';
+
+                currentData.forEach((row, rowIndex) => {
+                    tableHtml += '<tr>';
+                    headers.forEach(header => {
+                        tableHtml += `<td class="editable" data-row="${rowIndex}" data-key="${header}">${row[header]}</td>`;
+                    });
+                    tableHtml += '</tr>';
+                });
+
+                tableHtml += '</tbody></table>';
+                tableContainer.innerHTML = tableHtml;
+                attachCellListeners();
+            }
+
+            function attachCellListeners() {
+                const cells = document.querySelectorAll('.editable');
+                cells.forEach(cell => {
+                    cell.addEventListener('click', function() {
+                        if (this.querySelector('input')) return;
+                        const originalValue = this.innerText;
+                        const input = document.createElement('input');
+                        input.type = 'text';
+                        input.value = originalValue;
+                        this.innerHTML = '';
+                        this.appendChild(input);
+                        input.focus();
+                        this.classList.add('editing');
+
+                        input.addEventListener('blur', function() {
+                            const newValue = this.value;
+                            const cell = this.parentElement;
+                            const rowIndex = cell.dataset.row;
+                            const key = cell.dataset.key;
+                            currentData[rowIndex][key] = newValue;
+                            cell.innerText = newValue;
+                            cell.classList.remove('editing');
+                        });
+
+                        input.addEventListener('keydown', function(e) {
+                            if (e.key === 'Enter') {
+                                this.blur();
+                            }
+                        });
+                    });
+                });
+            }
+
+            function fetchData() {
+                fetch('/api/manifest')
+                    .then(response => response.json())
+                    .then(data => {
+                        originalData = JSON.parse(JSON.stringify(data));
+                        currentData = JSON.parse(JSON.stringify(data));
+                        renderTable();
+                    })
+                    .catch(error => {
+                        console.error('Error fetching manifest data:', error);
+                        tableContainer.innerHTML = '<p>Error loading data.</p>';
+                    });
+            }
+
+            confirmBtn.addEventListener('click', function() {
+                fetch('/api/manifest', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(currentData),
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.message) {
+                        alert('Manifest updated successfully!');
+                        originalData = JSON.parse(JSON.stringify(currentData));
+                    } else {
+                        alert('Error updating manifest: ' + (data.error || 'Unknown error'));
+                    }
+                })
+                .catch(error => {
+                    console.error('Error updating manifest:', error);
+                    alert('Error updating manifest.');
+                });
+            });
+
+            cancelBtn.addEventListener('click', function() {
+                currentData = JSON.parse(JSON.stringify(originalData));
+                renderTable();
+            });
+
+            fetchData();
+        });
+    </script>
+</body>
+</html>

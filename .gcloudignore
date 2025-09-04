@@ -58,3 +58,7 @@ scripts/local_*
 
 # MacOS files
 .DS_Store
+
+# local jsonl files
+manifest.jsonl
+chunks.jsonl
