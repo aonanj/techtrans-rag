@@ -43,9 +43,9 @@ images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_IMAGE_NAME}:latest
 
 substitutions:
-  _REGION: us-central1
-  _REPO_NAME: techtrans-rag-repo
-  _IMAGE_NAME: techtrans-rag-app
+  _REGION: us-west2
+  _REPO_NAME: aonanj/techtrans-rag
+  _IMAGE_NAME: tech-trans-rag
 
 options:
   logging: CLOUD_LOGGING_ONLY
