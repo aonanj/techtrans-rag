@@ -29,9 +29,12 @@ import os
 import re
 import json
 from pathlib import Path
-from openai import OpenAI
 
 from .logger import get_logger
+from vector_search import upsert_datapoints
+from .embeddings import generate_embeddings
+
+
 try:  # Avoid hard import failure if heavy deps (openai, fitz) not installed during chunk-only operations
 	from .document_processor import normalize  # type: ignore
 except Exception:  # pragma: no cover - fallback path
@@ -43,6 +46,14 @@ except Exception:  # pragma: no cover - fallback path
 logger = get_logger()
 
 API_KEY = os.getenv("OPENAI_API_KEY", "")
+
+# Optional embeddings import with fallback to avoid import errors
+try:
+	from .embeddings import generate_embeddings_for_chunks  # type: ignore
+except Exception:  # pragma: no cover
+	def generate_embeddings_for_chunks(texts):
+		logger.warning("Embeddings module unavailable; returning empty embeddings list")
+		return []
 
 
 def _split_pages(text: str) -> List[str]:
@@ -199,75 +210,6 @@ def _chunk_paragraphs_tokens(paragraphs: List[Tuple[int, str]], max_tokens: int,
 			chunks.append((chunk_text, min(buf_pages), max(buf_pages)))
 	return chunks
 
-def extract_chunk_content(file_path, chunk_text):
-	"""Extract structured metadata for a given chunk (or entire file) using OpenAI."""
-	try:
-		with open(file_path, "r", encoding="utf-8") as f:
-			raw = f.read()
-		full_text = normalize(raw)
-		# Use provided chunk_text if not empty; otherwise fall back to full normalized file text.
-
-		api_key = os.getenv("OPENAI_API_KEY")
-		if not api_key:
-			logger.debug("No OPENAI_API_KEY; skipping semantic extraction for chunk")
-			return {}
-		client = OpenAI(api_key=api_key)
-		prompt = (
-			f"""
-			Examine the attached technology transactions document and then identify respective values for each of the following keys for the chunk: section_number (section of this chunk, including any subsections, paragraphs, etc.; e.g., 5.B), section_title (section or subsection title of this chunk, include "Exhibit" if applicable), clause_type (type of clause of this chunk), path (section path to this chunk, including any parent subsections, paragraphs levels, etc.; e.g., for section_number 9.B.(vi)(a), the path would be 9 ➞ 9.B ➞ 9.B.(vi) ➞ 9.B.(vi)(a)), numbers_present (boolean indicating if section, subsection, and/or paragraph numbers are present in this chunk), definition_terms (list of terms defined in this chunk).
-			Return a response in following JSON format ONLY (use null where unknown, ensure valid JSON):\n
-			{{
-			  "section_number": null,
-			  "section_title": null,
-			  "clause_type": null,
-			  "path": null,
-			  "numbers_present": null,
-			  "definition_terms": []
-			}}\n
-			Do not include commentary outside the JSON object.\n
-			--- FULL TEXT START ---\n{full_text}\n--- FULL TEXT END ---\n\n-- CHUNK START --\n{chunk_text}\n-- CHUNK END --
-			"""
-		)
-
-		ai_model = "gpt-5-mini"
-
-		completion = client.chat.completions.create(
-			model=ai_model,
-			messages=[
-				{"role": "system", "content": "Extract the document's section_number, section_title, clause_type, path, numbers_present, and definition_terms based from the following text.\n"},
-				{"role": "user", "content": prompt},
-			],
-			verbosity="low"
-		)
-
-		result_text: str = (completion.choices[0].message.content or "") if completion.choices else ""
-		logger.info(f"AI manifest raw response: {result_text}")
-		expected_keys = [
-			"section_number",
-			"section_title",
-			"clause_type",
-			"path",
-			"numbers_present",
-			"definition_terms"
-		]
-		# Parse AI JSON response (use result_text, not raw file contents)
-		data: Dict[str, Any] = {}
-		try:
-			data = json.loads(result_text)
-		except Exception:
-			logger.warning("AI manifest response not valid JSON; returning defaults")
-		manifest = {k: (data.get(k) if isinstance(data, dict) else None) for k in expected_keys}
-
-		for k, v in manifest.items():
-			if isinstance(v, str) and v.strip().lower() in {"unknown", "null", "n/a", "none", ""}:
-				manifest[k] = None
-
-		return manifest
-	except Exception as e:
-		logger.error(f"Error extracting chunk metadata from {file_path}: {e}")
-		return {}
-
-
 def chunk_doc(file_path: str, doc_id: str, max_chars: int = 1200, overlap: int = 150, *, max_tokens: Optional[int] = None, token_overlap: Optional[int] = None) -> List[str]:
 	"""Chunk a cleaned text file, persist chunks, metadata, embeddings, and index.
 
@@ -306,7 +248,7 @@ def chunk_doc(file_path: str, doc_id: str, max_chars: int = 1200, overlap: int =
 
 	pages = _split_pages(text)
 	logger.info("Chunking doc_id=%s pages=%d (max_chars=%d overlap=%d)", doc_id, len(pages), max_chars, overlap)
-
+	doc_iden = doc_id  # avoid shadowing
 	# Flatten paragraphs with page indices
 	para_with_pages: List[Tuple[int, str]] = []
 	for p_idx, page_text in enumerate(pages, start=1):
@@ -323,8 +265,9 @@ def chunk_doc(file_path: str, doc_id: str, max_chars: int = 1200, overlap: int =
 	else:
 		chunk_specs = _chunk_paragraphs(para_with_pages, max_chars=max_chars, overlap=overlap)
 
-	from . import database  # local import to defer Flask dependency until needed
+	from . import database, vector_search
 	db = database.get_db()
+	db_session = db
 	chunk_ids: List[str] = []
 
 	# Preload manifest metadata; only include these keys in output metadata
@@ -363,39 +306,6 @@ def chunk_doc(file_path: str, doc_id: str, max_chars: int = 1200, overlap: int =
 			return num, title if title else None
 		return None, heading.strip() if heading else None
 
-	def _classify_clause(text_lower: str) -> Optional[str]:
-		if 'limitation' in text_lower and 'liability' in text_lower:
-			return 'limitation_of_liability'
-		if 'confidential' in text_lower or 'non-disclosure' in text_lower:
-			return 'confidentiality'
-		if 'term and termination' in text_lower or ('termination' in text_lower and 'term ' in text_lower[:200]):
-			return 'term_termination'
-		if 'indemnif' in text_lower:
-			return 'indemnification'
-		if 'warrant' in text_lower:
-			return 'warranty'
-		if 'license' in text_lower:
-			return 'license'
-		if 'liability' in text_lower:
-			return 'liability'
-		if 'assignment' in text_lower:
-			return 'assignment'
-		if 'venue' in text_lower or 'jurisdiction' in text_lower:
-			return 'jurisdiction'
-		if 'governing law' in text_lower:
-			return 'governing_law'
-		if 'rights' in text_lower:
-			return 'rights'
-		if 'ownership' in text_lower:
-			return 'ownership'
-		if 'disclaimer' in text_lower:
-			return 'disclaimer'
-		if 'exclusion' in text_lower:
-			return 'exclusion'
-		if 'payment' in text_lower or 'fee' in text_lower or 'pricing' in text_lower:
-			return 'payment'
-		return None
-
 	def _detect_definition_terms(text_block: str) -> List[str]:
 		terms = set()
 		# Quoted capitalized phrases
@@ -417,37 +327,23 @@ def chunk_doc(file_path: str, doc_id: str, max_chars: int = 1200, overlap: int =
 	chunk_metadata_records: List[Dict[str, Any]] = []
 
 	for idx, (chunk_text, page_s, page_e) in enumerate(chunk_specs):
-		chunk_info = extract_chunk_content(file_path, chunk_text)
-		sec_number = chunk_info.get("section_number")
-		section_title = chunk_info.get("section_title")
-		clause_type = chunk_info.get("clause_type")
-		numbers_present = chunk_info.get("number_present")
-		definition_terms = chunk_info.get("definition_terms")
-		section_path = chunk_info.get("path")
+		heading = _derive_section(chunk_text)
+		sec_number, section_title = _extract_section_number_and_title(heading) if heading else (None, None)
 
 
-		chunk_id, _content_hash = database.persist_chunk(
-			db,
-			doc_id=doc_id,
+		new_chunk = database.add_chunk(
+			doc_id=int(doc_iden),
+			chunk_index=idx,
 			text=chunk_text,
-			page_s=page_s,
-			page_e=page_e,
+			page_start=page_s,
+			page_end=page_e,
 			section=sec_number,
 		)
-		# Convert to double-colon style id for external metadata if desired
-		# internal chunk_id format: doc_id:hashprefix
-		external_id = chunk_id.replace(':', '::', 1)
-		chunk_ids.append(chunk_id)
+		chunk_ids.append(new_chunk.id)
 		chunk_metadata_records.append({
-			'id': external_id,
+			'id': new_chunk.id,
 			'doc_id': doc_id,
-			'section_number': sec_number,
-			'section_title': section_title,
-			'clause_type': clause_type,
-			'path': section_path,
 			'text': chunk_text,
-			'numbers_present': numbers_present,
-			'definition_terms': definition_terms,
 			'metadata': {k: v for k, v in manifest_meta.items() if v is not None},
 			'prev_id': None,  # fill later
 			'next_id': None,  # fill later
@@ -475,23 +371,37 @@ def chunk_doc(file_path: str, doc_id: str, max_chars: int = 1200, overlap: int =
 							existing.append(obj)
 					except Exception:
 						continue
-		# Rewrite file with filtered + new records
+		# Write updated file excluding old records for this doc_id and adding new ones
 		with open(chunks_jsonl, 'w', encoding='utf-8') as cf:
 			for obj in existing + chunk_metadata_records:
 				cf.write(json.dumps(obj, ensure_ascii=False) + '\n')
-		logger.info('Wrote %d chunk metadata records to %s', len(chunk_metadata_records), chunks_jsonl)
 	except Exception as e:
-		logger.error('Failed writing chunk metadata for %s: %s', doc_id, e)
-
-	# Generate embeddings + index in Chroma (independent of metadata write success)
+		logger.warning("Failed to update chunks.jsonl for %s: %s", doc_id, e)
+	chunk_texts = [spec[0] for spec in chunk_specs]
+	# Generate embeddings and upsert to Vertex AI
 	try:
-		from .embeddings import generate_and_store_embeddings, build_chroma_index
-		generated = generate_and_store_embeddings(doc_id=doc_id)
-		indexed = build_chroma_index(doc_id=doc_id)
-		logger.info('Embeddings + index complete for %s: generated=%d indexed=%d', doc_id, generated, indexed)
+		embeddings = generate_embeddings(chunk_texts)
+
+		if embeddings:
+			datapoints = [{'id': cid, 'embedding': emb} for cid, emb in zip(chunk_ids, embeddings)]
+			upsert_datapoints(datapoints)
+			logger.info('Upserted %d embeddings to Vertex AI for doc_id=%s', len(embeddings), doc_id)
+		else:
+			logger.warning('No embeddings generated (module missing or empty) for doc_id=%s', doc_id)
+
 	except Exception as e:  # pragma: no cover
 		logger.error('Embedding/indexing step failed for %s: %s', doc_id, e)
+		embeddings = generate_embeddings(chunk_texts)
 
+		if embeddings:
+			datapoints = [{'id': cid, 'embedding': emb} for cid, emb in zip(chunk_ids, embeddings)]
+			vector_search.upsert_datapoints(datapoints)
+			logger.info('Upserted %d embeddings to Vertex AI for doc_id=%s', len(embeddings), doc_id)
+		else:
+			logger.warning('No embeddings generated (module missing or empty) for doc_id=%s', doc_id)
+
+	db_session.commit()
+	db_session.close()
 	logger.info("Persisted %d chunks for doc_id=%s", len(chunk_ids), doc_id)
 	return chunk_ids
 

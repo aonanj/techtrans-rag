@@ -1,138 +1,262 @@
-import sqlite3
-from pathlib import Path
-from flask import current_app, g
-from infrastructure.document_processor import sha256_text
+"""
+Cloud SQL (PostgreSQL) database layer for Cloud Run.
 
-TOK_VER = 1 # increment if tokenization changes
-SEG_VER = 1 # increment if segmentation changes
+Features:
+- SQLAlchemy engine with small pools for serverless
+- Works with Private IP (host/port) OR Cloud SQL Python Connector (IAM or password)
+- Minimal ORM schema for documents, chunks, and embeddings
+- Drop-in helpers mirroring prior sqlite-style operations
 
-def get_db():
-    if not hasattr(g, "db"):
-        db_path = current_app.config.get("DB_PATH", "data/app.db")
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        g.db = conn
-    return g.db
+Env vars (set in Cloud Run):
+  DB_NAME=appdb
+  DB_USER=appuser                     # not needed if IAM DB auth is used
+  DB_PASSWORD=...                     # inject via Secret Manager if using password auth
+  DB_HOST=10.x.x.x                    # Private IP address of the Cloud SQL instance
+  DB_PORT=5432                        # optional
+  DB_USE_CONNECTOR=true|false         # true to use Cloud SQL Python Connector
+  CLOUD_SQL_CONNECTION_NAME=proj:region:instance  # required if DB_USE_CONNECTOR=true
+  DB_IAM_AUTH=true|false              # true to use IAM DB auth via connector (no password)
 
-def close_db(e=None):
-    db = g.pop("db", None)
-    if db is not None:
-        db.close()
+Notes:
+- Keep connection counts low on Cloud Run: pool_size=1, max_overflow=2.
+- If you enabled IAM DB auth, create a DB user mapped to your Run service account and GRANT privileges.
+"""
+import os
+import contextlib
+import threading
+from datetime import datetime
 
+from sqlalchemy import (
+    create_engine, Column, Integer, String, Text, DateTime, ForeignKey, LargeBinary, Index, text
+)
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker, scoped_session
+from flask import g
+from google.cloud.sql.connector import Connector, IPTypes
+
+# ---------------------------------------------------------------------------
+# Versioning for corpus mechanics
+# ---------------------------------------------------------------------------
+TOK_VER = int(os.getenv("TOK_VER", "1"))
+SEG_VER = int(os.getenv("SEG_VER", "1"))
+
+# ---------------------------------------------------------------------------
+# Engine factory
+_ENGINE = None
+_SESSION_FACTORY = None
+_LOCK = threading.Lock()
+Base = declarative_base()
+
+def _build_engine():
+    use_connector = os.getenv("DB_USE_CONNECTOR", "false").lower() == "true"
+    use_connector = os.getenv("DB_USE_CONNECTOR", "false").lower() == "true"
+    db_name = os.getenv("DB_NAME", "appdb")
+    pool_kwargs = dict(pool_size=1, max_overflow=2, pool_pre_ping=True, pool_recycle=1800)
+
+    if use_connector:
+        if Connector is None:
+            raise RuntimeError("google-cloud-sql-connector not installed but DB_USE_CONNECTOR=true")
+        conn_name = os.environ["CLOUD_SQL_CONNECTION_NAME"]  # proj:region:instance
+        iam_auth = os.getenv("DB_IAM_AUTH", "false").lower() == "true"
+        db_user = os.getenv("DB_USER")  # if iam_auth is true, this should be the IAM principal email
+        db_password = os.getenv("DB_PASSWORD")  # optional when iam_auth=true
+
+        connector = Connector(ip_type=IPTypes.PRIVATE)
+
+        def getconn():
+            return connector.connect(
+                conn_name,
+                "pg8000",
+                user=db_user,
+                password=None if iam_auth else db_password,
+                db=db_name,
+                enable_iam_auth=iam_auth,
+            )
+
+        # Creator-based engine; SQLAlchemy URL is a placeholder
+        return create_engine("postgresql+pg8000://", creator=getconn, **pool_kwargs)
+
+    # Private IP TCP path
+    db_user = os.getenv("DB_USER", "appuser")
+    db_password = os.getenv("DB_PASSWORD", "")
+    host = os.getenv("DB_HOST", "127.0.0.1")
+    port = int(os.getenv("DB_PORT", "5432"))
+
+    # URL-encode password if needed
+    from urllib.parse import quote_plus
+    pwd = quote_plus(db_password) if db_password else ""
+    auth = f"{db_user}:{pwd}@" if db_password or db_user else ""
+    url = f"postgresql+pg8000://{auth}{host}:{port}/{db_name}"
+    return create_engine(url, **pool_kwargs)
+
+def _ensure_engine():
+    global _ENGINE, _SESSION_FACTORY
+    if _ENGINE is None:
+        with _LOCK:
+            if _ENGINE is None:
+                _ENGINE = _build_engine()
+                _SESSION_FACTORY = scoped_session(sessionmaker(bind=_ENGINE, autoflush=False, autocommit=False))
+    return _ENGINE
+
+# ---------------------------------------------------------------------------
+# ORM schema
+# ---------------------------------------------------------------------------
+class Document(Base):
+    __tablename__ = "documents"
+    doc_id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(512), nullable=True)
+    source_path = Column(Text, nullable=True)
+    sha256 = Column(String(64), nullable=False, unique=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    chunks = relationship("Chunk", cascade="all, delete-orphan", back_populates="document")
+
+class Chunk(Base):
+    __tablename__ = "chunks"
+    chunk_id = Column(Integer, primary_key=True, autoincrement=True)
+    doc_id = Column(Integer, ForeignKey("documents.doc_id", ondelete="CASCADE"), nullable=False, index=True)
+    chunk_index = Column(Integer, nullable=False)  # position within the doc
+    page_start = Column(Integer, nullable=True)
+    page_end = Column(Integer, nullable=True)
+    section = Column(Text, nullable=True)
+    text = Column(Text, nullable=False)
+    token_count = Column(Integer, nullable=True)
+    tok_ver = Column(Integer, default=TOK_VER, nullable=False)
+    seg_ver = Column(Integer, default=SEG_VER, nullable=False)
+
+    document = relationship("Document", back_populates="chunks")
+    embedding = relationship("Embedding", uselist=False, cascade="all, delete-orphan", back_populates="chunk")
+
+    __table_args__ = (
+        Index("ix_chunks_doc_idx", "doc_id", "chunk_index"),
+    )
+
+class Embedding(Base):
+    __tablename__ = "embeddings"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chunk_id = Column(Integer, ForeignKey("chunks.chunk_id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    model = Column(String(128), nullable=False)
+    dim = Column(Integer, nullable=False)
+    # Store raw vectors for provenance; ANN search is handled by Vertex AI Vector Search
+    vector = Column(LargeBinary, nullable=False)
+
+    chunk = relationship("Chunk", back_populates="embedding")
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 def init_db():
-    db = get_db()
-    db.execute(
-        """
-            CREATE TABLE IF NOT EXISTS documents (
-                doc_id TEXT PRIMARY KEY,
-                source_path TEXT NOT NULL,
-                title TEXT,
-                file_hash TEXT NOT NULL,
-                modified_at INTEGER NOT NULL
-            );
-        """
-    )
-    db.execute(
-        """
-            CREATE TABLE IF NOT EXISTS chunks (
-                chunk_id TEXT PRIMARY KEY,
-                doc_id TEXT NOT NULL,
-                page_start INTEGER,
-                page_end INTEGER,
-                section TEXT,
-                chunk_hash TEXT NOT NULL,
-                content_hash TEXT NOT NULL,     
-                text TEXT NOT NULL,
-                FOREIGN KEY(doc_id) REFERENCES documents(doc_id)
-            );
-        """
-    )
-    db.execute(
-        """
-            CREATE TABLE IF NOT EXISTS embeddings (
-                chunk_id TEXT PRIMARY KEY,
-                model TEXT NOT NULL,
-                dim INTEGER NOT NULL,
-                vector BLOB NOT NULL,
-                FOREIGN KEY(chunk_id) REFERENCES chunks(chunk_id)
-            );
-        """
-    )
-    db.execute(
-        """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_doc_hash ON chunks(doc_id, chunk_hash);
-        """
-    )
-    db.execute(
-        """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_embeddings_chunk_model ON embeddings(chunk_id, model);
-        """
-    )
-    db.commit()
+    """Create tables if they do not exist."""
+    engine = _ensure_engine()
+    Base.metadata.create_all(engine)
 
-def upsert_document(db, doc_id: str, source_path: str, title: str, norm_text: str, mtime: float) -> bool:
-    file_hash = sha256_text(norm_text)
-    cur = db.execute("SELECT file_hash FROM documents WHERE doc_id=?", (doc_id,))
-    row = cur.fetchone()
-    if row and row["file_hash"] == file_hash:
-        return False  # no change
-    db.execute("REPLACE INTO documents(doc_id, source_path, title, file_hash, modified_at) VALUES (?,?,?,?,?)",
-               (doc_id, source_path, title, file_hash, int(mtime)))
-    db.commit()
-    return True 
+def get_session():
+    _ensure_engine()
+    if _SESSION_FACTORY is None:
+        raise RuntimeError("Session factory not initialized")
+    return _SESSION_FACTORY()
 
-def persist_chunk(db, doc_id, text, page_s, page_e, section):
-    chunk_hash = sha256_text(text)
-    content_hash = sha256_text(f"{text}|tok={TOK_VER}|seg={SEG_VER}")
-    chunk_id = f"{doc_id}:{chunk_hash[:12]}"
-    db.execute("""REPLACE INTO chunks(chunk_id, doc_id, page_start, page_end, section, chunk_hash, content_hash, text)
-               VALUES (?,?,?,?,?,?,?,?)""",
-               (chunk_id, doc_id, page_s, page_e, section, chunk_hash, content_hash, text))
-    db.commit()
-    return chunk_id, content_hash
+# Flask helper (keeps parity with prior get_db using g)
+def get_db():
+    if not hasattr(g, "db_session"):
+        g.db_session = get_session()
+    return g.db_session
 
-
-def print_all_documents(db=None):
-    """Print all rows from the documents table to stdout and return them.
-
-    If no connection is passed, obtains one via get_db(). Returns the list of
-    sqlite3.Row objects (may be empty). Swallows errors if table is missing.
-    """
-    if db is None:
-        db = get_db()
+@contextlib.contextmanager
+def session_scope():
+    """Provide a transactional scope."""
+    session = get_session()
     try:
-        cur = db.execute("SELECT doc_id, source_path, title, file_hash, modified_at FROM documents ORDER BY modified_at DESC")
-        rows = cur.fetchall()
-        for r in rows:
-            # Convert Row to regular dict for a cleaner print representation
-            print({k: r[k] for k in r.keys()})
-        return rows
-    except Exception as e:
-        print(f"Error printing documents: {e}")
-        return []
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
-def delete_document(doc_id: str):
-    """
-    Delete a document and its related chunks/embeddings.
-    Foreign keys were declared but no ON DELETE CASCADE, so delete manually.
-    """
-    db = get_db()
-    # Ensure FK enforcement (SQLite off by default per-connection)
-    db.execute("PRAGMA foreign_keys=ON;")
-    # Delete embeddings referencing chunks of this doc
-    db.execute("""DELETE FROM embeddings
-                  WHERE chunk_id IN (SELECT chunk_id FROM chunks WHERE doc_id=?)""",
-               (doc_id,))
-    # Delete chunks
-    db.execute("DELETE FROM chunks WHERE doc_id=?", (doc_id,))
-    # Delete document
-    db.execute("DELETE FROM documents WHERE doc_id=?", (doc_id,))
-    db.commit()
+# --------------- CRUD ---------------
+def add_document(*, sha256, title=None, source_path=None):
+    """Insert a document if absent; return Document."""
+    with session_scope() as s:
+        doc = s.query(Document).filter_by(sha256=sha256).one_or_none()
+        if doc:
+            return doc
+        doc = Document(sha256=sha256, title=title, source_path=source_path)
+        s.add(doc)
+        s.flush()
+        return doc
+
+def add_chunk(doc_id: int, text: str, chunk_index: int, token_count: int | None = None,
+              page_start: int | None = None, page_end: int | None = None, section: str | None = None,
+              tok_ver: int = TOK_VER, seg_ver: int = SEG_VER):
+    with session_scope() as s:
+        ch = Chunk(doc_id=doc_id, text=text, chunk_index=chunk_index,
+                   token_count=token_count, tok_ver=tok_ver, seg_ver=seg_ver,
+                   page_start=page_start, page_end=page_end, section=section)
+        s.add(ch)
+        s.flush()
+        return ch
+
+def upsert_embedding(chunk_id: int, model: str, dim: int, vector_bytes: bytes):
+    with session_scope() as s:
+        emb = s.query(Embedding).filter_by(chunk_id=chunk_id).one_or_none()
+        if emb:
+            # Update the existing embedding
+            s.query(Embedding).filter_by(chunk_id=chunk_id).update({
+                'model': model,
+                'dim': dim,
+                'vector': vector_bytes
+            })
+            s.flush()
+            return s.query(Embedding).filter_by(chunk_id=chunk_id).one()
+        emb = Embedding(chunk_id=chunk_id, model=model, dim=dim, vector=vector_bytes)
+        s.add(emb)
+        s.flush()
+        return emb
+
+def get_document(doc_id: int):
+    with session_scope() as s:
+        return s.query(Document).filter_by(doc_id=doc_id).one_or_none()
+
+def get_document_by_sha(sha256: str):
+    with session_scope() as s:
+        return s.query(Document).filter_by(sha256=sha256).one_or_none()
+
+def get_chunks_for_doc(doc_id: int):
+    with session_scope() as s:
+        return s.query(Chunk).filter_by(doc_id=doc_id).order_by(Chunk.chunk_index.asc()).all()
+
+def get_chunks_by_ids(chunk_ids: list[int]):
+    with session_scope() as s:
+        return s.query(Chunk).filter(Chunk.chunk_id.in_(chunk_ids)).all()
+
+def get_embedding_for_chunk(chunk_id: int):
+    with session_scope() as s:
+        return s.query(Embedding).filter_by(chunk_id=chunk_id).one_or_none()
+
+def delete_document(doc_id: int):
+    with session_scope() as s:
+        doc = s.query(Document).filter_by(doc_id=doc_id).one_or_none()
+        if doc:
+            s.delete(doc)
 
 def clear_database():
-    db = get_db()
-    db.execute("DELETE FROM documents")
-    db.execute("DELETE FROM chunks")
-    db.execute("DELETE FROM embeddings")
-    db.commit()
+    with session_scope() as s:
+        s.query(Embedding).delete()
+        s.query(Chunk).delete()
+        s.query(Document).delete()
+
+# Convenience for health checks
+def ping():
+    engine = _ensure_engine()
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+
+__all__ = [
+    "init_db", "get_session", "get_db", "session_scope",
+    "add_document", "add_chunk", "upsert_embedding",
+    "get_document", "get_document_by_sha", "get_chunks_for_doc", "get_chunks_by_ids",
+    "get_embedding_for_chunk", "delete_document", "clear_database",
+    "TOK_VER", "SEG_VER", "ping",
+    "Document", "Chunk", "Embedding",
+]

@@ -16,20 +16,8 @@ def create_app():
     app.register_blueprint(web_bp)
     app.register_blueprint(api_bp)
 
-    @app.teardown_appcontext
-    def _close_db(exception):
-        db.close_db()
-
     with app.app_context():
         db.init_db()
-
-    @app.cli.command("list-docs")
-    def list_docs():
-        db.print_all_documents()
-    
-    @app.cli.command("clear-db")
-    def clear_db():
-        db.clear_database()
 
     return app
 

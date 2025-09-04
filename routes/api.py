@@ -1,545 +1,292 @@
+# api.py (Cloud Run + PostgreSQL refactor)
 import os
 import json
 from datetime import datetime, timezone
-from flask import Blueprint, request, jsonify, current_app
-import uuid
-from werkzeug.utils import secure_filename
-from infrastructure.logger import get_logger
-from infrastructure.database import get_db, upsert_document
-from infrastructure.embeddings import generate_and_store_embeddings, build_chroma_index
-from infrastructure.document_processor import extract_text, extract_title, get_manifest_info, sha256_text
-from infrastructure.chunker import chunk_doc
 
+from flask import Blueprint, request, jsonify
+from werkzeug.utils import secure_filename
+
+from infrastructure.logger import get_logger
+
+# Swap old infrastructure.database for the local database.py refactor
+# Provides SQLAlchemy sessions and helpers for Cloud SQL Postgres
+from infrastructure.database import (
+    init_db,
+    add_document,
+    add_chunk,
+    get_document_by_sha,
+    get_chunks_for_doc,
+)
+from infrastructure.embeddings import generate_and_store_embeddings, find_nearest_neighbors_advanced
+# Keep existing processing utilities
+from infrastructure.document_processor import (
+    extract_text,
+    extract_title,
+    get_manifest_info,
+    sha256_text,
+)
+from infrastructure.chunker import chunk_doc
+# If you have a new retrieval path (Vertex AI Vector Search), wire it in here:
+from infrastructure.vector_search import find_nearest_neighbors
+from infrastructure.database import get_chunks_by_ids
+
+api_bp = Blueprint("api", __name__)
 logger = get_logger()
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
+
 def allowed_file(filename: str) -> bool:
-	"""Return True if the filename has an allowed extension.
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
-	Note: Docstring for the route advertises support for txt as well, so include it here.
-	"""
-	return "." in filename and filename.rsplit('.', 1)[1].lower() in ["pdf", "docx", "txt"]
+def ensure_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
 
+def _upload_dirs():
+    base = os.getenv("UPLOAD_FOLDER", os.path.join(os.getcwd(), ".data/uploads"))
+    raw_dir = os.path.join(base, "raw")
+    clean_dir = os.path.join(base, "clean")
+    meta_dir = os.path.join(base, "metadata")
+    ensure_dir(raw_dir)
+    ensure_dir(clean_dir)
+    ensure_dir(meta_dir)
+    return raw_dir, clean_dir, meta_dir
 
-api_bp = Blueprint('api_bp', __name__, url_prefix='/api')
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 
-@api_bp.route('/upload', methods=['POST'])
+@api_bp.route("/upload", methods=["POST"])
 def add_doc():
-	"""Accept a single pdf, docx, or txt document upload and store it locally.
+    """Upload one document, extract text, persist metadata in Postgres, and schedule chunking."""
+    if "file" not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files["file"]
+    if not file or not file.filename:
+        return jsonify({"error": "No selected file"}), 400
+    if not allowed_file(file.filename):
+        return jsonify({"error": "Unsupported file type"}), 400
 
-	Request: multipart/form-data with field name 'file'.
-	Response: JSON { message, filename }
-	"""
-	if 'file' not in request.files:
-		logger.warning("Upload attempted without 'file' in form data")
-		return jsonify({"error": "No file part"}), 400
+    raw_dir, clean_dir, meta_dir = _upload_dirs()
+    filename = secure_filename(file.filename)
+    raw_path = os.path.join(raw_dir, filename)
+    file.save(raw_path)
 
-	file = request.files['file']
+    # Extract text and title
+    try:
+        text = extract_text(raw_path)
+        title = extract_title(text) or filename
+    except Exception as e:
+        logger.exception("Text extraction failed: %s", e)
+        return jsonify({"error": "Failed to extract text"}), 500
 
-	if not file.filename:
-		logger.warning("Upload attempted with empty filename")
-		return jsonify({"error": "No selected file"}), 400
+    # Persist clean text to disk for transparency (optional)
+    clean_name = f"{os.path.splitext(filename)[0]}.txt"
+    clean_path = os.path.join(clean_dir, clean_name)
+    with open(clean_path, "w", encoding="utf-8") as f:
+        f.write(text)
 
-	filename_value = file.filename  # type: ignore[assignment]
-	if not allowed_file(filename_value):
-		logger.warning("Rejected file with disallowed extension: %s", file.filename)
-		return jsonify({"error": "Unsupported file type. Allowed: PDF, TXT, DOCX"}), 400
+    # Compute content hash and upsert document row
+    content_sha = sha256_text(text)
+    doc = get_document_by_sha(content_sha)
+    if not doc:
+        # add_document returns the Document class on success, not an instance
+        add_document(sha256=content_sha, title=title, source_path=raw_path)
+        # so we must re-fetch
+        doc = get_document_by_sha(content_sha)
 
-	# Ensure uploads directory exists (configurable via UPLOAD_FOLDER or default to ./uploads)
-	upload_folder = os.getenv('UPLOAD_FOLDER', None) or os.path.join(current_app.root_path, '.data/corpus_raw')
-	clean_folder = os.getenv('CLEAN_FOLDER', None) or os.path.join(current_app.root_path, '.data/corpus_clean')
-	metadata_folder = os.getenv('METADATA_FOLDER', None) or os.path.join(current_app.root_path, '.data/metadata')
-	os.makedirs(upload_folder, exist_ok=True)
-	os.makedirs(clean_folder, exist_ok=True)
-	os.makedirs(metadata_folder, exist_ok=True)
+    if not doc:
+        logger.error("Failed to create or retrieve document for SHA: %s", content_sha)
+        return jsonify({"error": "Failed to process document in database"}), 500
 
-	doc_id = str(uuid.uuid4())
-	base_name = secure_filename(filename_value)
-	mtime_epoch = int(datetime.now(timezone.utc).timestamp())  # seconds since epoch fits in 64-bit
-	name, ext = os.path.splitext(base_name)			# noqa: F841 (may be used later)
-	stored_filename = f"{doc_id}{ext.lower()}"  
-	file_path = os.path.join(upload_folder, stored_filename)
+    # Ensure we have a concrete integer primary key (avoid Column / class attribute issues)
+    doc_id_val = getattr(doc, "doc_id", None)
+    if not isinstance(doc_id_val, int):
+        logger.error("Document record missing integer doc_id: %s", doc)
+        return jsonify({"error": "Invalid document id"}), 500
 
+    # Write manifest.jsonl record to local metadata dir for compatibility
+    manifest = get_manifest_info(text)
+    manifest_record = {
+        "doc_id": doc_id_val,
+        "title": title,
+        "sha256": content_sha,
+        "source_path": raw_path,
+        "clean_path": clean_path,
+        "bytes": os.path.getsize(raw_path),
+        "content_type": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "manifest": manifest,
+    }
+    ensure_dir(os.path.join(meta_dir, str(doc_id_val)))
+    manifest_file = os.path.join(meta_dir, str(doc_id_val), "manifest.jsonl")
+    with open(manifest_file, "a", encoding="utf-8") as mf:
+        mf.write(json.dumps(manifest_record, ensure_ascii=False) + "\n")
 
-	try:
-		file.save(file_path)
-	except Exception as e:
-		logger.exception("Failed to save uploaded file: %s", e)
-		return jsonify({"error": "Failed to save file"}), 500
+    # Chunk now. Persist chunks into Postgres via add_chunk.
+    try:
+        chunks = chunk_doc(file_path=clean_path, doc_id=str(doc_id_val))
+        # Expected `chunks` is iterable of dicts: {text, chunk_index, token_count?}
+        persisted = 0
+        for ch in chunks or []:
+            raw_text = ch.get("text") if isinstance(ch, dict) else ch
+            if raw_text is None:
+                # Skip chunks without text to satisfy type requirements
+                continue
+            text_val = str(raw_text)
+            idx = ch.get("chunk_index", persisted) if isinstance(ch, dict) else persisted
+            tok = ch.get("token_count") if isinstance(ch, dict) else None
+            add_chunk(doc_id=doc_id_val, text=text_val, chunk_index=idx, token_count=tok)
+            persisted += 1
+    except Exception as e:
+        logger.exception("Chunking failed: %s", e)
+        # Do not fail the upload if chunking fails. The worker can retry.
+        pass
 
-	logger.info("Stored uploaded document: %s", doc_id)
-	
-	text = extract_text(file_path)
-	title = extract_title(text[:1000])
-	manifest_info = get_manifest_info(file_path)
-	logger.info("Extracted title: %s", title)
-	logger.info("Extracted manifest info: %s", manifest_info)
-
-	clean_text_path = os.path.join(clean_folder, f"{doc_id}.txt")
-	try:
-		with open(clean_text_path, "w", encoding="utf-8") as tf:
-			tf.write(text)
-		logger.info("Wrote cleaned text for %s", doc_id)
-	except Exception as e:
-		logger.error("Failed to write cleaned text for %s: %s", doc_id, e)
-
-	source_url = manifest_info.get("source_url")
-	license_ = manifest_info.get("license")
-	doc_type = manifest_info.get("doc_type")
-	party_role = manifest_info.get("party_role")
-	jurisdiction = manifest_info.get("jurisdiction")
-	governing_law = manifest_info.get("governing_law")
-	industry = manifest_info.get("industry")
-	effective_date = manifest_info.get("effective_date")
-	manifest_jsonl_path = os.path.join(metadata_folder, "manifest.jsonl")
-
-	manifest_record = {
-		"doc_id": doc_id,
-		"source_url": source_url,
-		"license": license_,
-		"doc_type": doc_type,
-		"party_role": party_role,
-		"jurisdiction": jurisdiction,
-		"governing_law": governing_law,
-		"industry": industry,
-		"effective_date": effective_date,
-		"last_retrieved": datetime.now(timezone.utc).isoformat(),
-		"hash_sha256": sha256_text(text)
-	}
-
-	try:
-		with open(manifest_jsonl_path, "a", encoding="utf-8") as mf:
-			mf.write(json.dumps(manifest_record, ensure_ascii=False) + "\n")
-		logger.info("Appended manifest metadata for %s", doc_id)
-	except Exception as e:
-		logger.exception("Failed writing manifest metadata for %s: %s", doc_id, e)
-
-	upsert_document(db=get_db(), doc_id=doc_id, source_path=file_path, title=title, norm_text=text, mtime=mtime_epoch)
-	
-	chunk_doc(file_path=clean_text_path, doc_id=doc_id)
-
-	return jsonify({
-		"message": "Document uploaded successfully.",
-		"filename": doc_id
-	}), 201
+    return jsonify({"message": "ok", "doc_id": doc_id_val, "sha256": content_sha, "title": title}), 200
 
 
-@api_bp.route('/embeddings/generate', methods=['POST'])
-def generate_embeddings_endpoint():
-	"""Generate embeddings (and optionally index in Chroma) for chunks.
-
-	Request JSON (all optional):
-		{
-			"doc_id": "<document id to restrict>",
-			"reindex": true | false  # if true, rebuild Chroma index for that scope
-		}
-
-	Response JSON:
-		{"generated": <int>, "indexed": <int>, "doc_id": <str|None>, "model": <str>, "token_mode": <bool>}
-	"""
-	payload = {}
-	if request.is_json:
-		try:
-			payload = request.get_json() or {}
-		except Exception:
-			return jsonify({"error": "Invalid JSON"}), 400
-	doc_id = payload.get('doc_id') if isinstance(payload, dict) else None
-	reindex = bool(payload.get('reindex')) if isinstance(payload, dict) else False
-
-	model = os.getenv('EMBEDDING_MODEL', 'text-embedding-3-large')
-	try:
-		generated = generate_and_store_embeddings(doc_id=doc_id, model=model)
-	except Exception as e:
-		logger.exception("Embedding generation failed")
-		return jsonify({"error": f"embedding generation failed: {e}"}), 500
-
-	indexed = 0
-	if reindex:
-		try:
-			indexed = build_chroma_index(doc_id=doc_id, model=model)
-		except Exception as e:
-			logger.error("Index build failed: %s", e)
-			# still return success for generated; include error detail
-			return jsonify({
-				"generated": generated,
-				"indexed": indexed,
-				"doc_id": doc_id,
-				"model": model,
-				"index_error": str(e)
-			}), 207  # 207 Multi-Status style signal
-
-	return jsonify({
-		"generated": generated,
-		"indexed": indexed,
-		"doc_id": doc_id,
-		"model": model
-	}), 200
-
-@api_bp.route('/query', methods=['POST'])
-def query():
-	"""RAG query endpoint.
-
-	Request JSON:
-	{
-	  "query": "...",            # required user question
-	  "top_k": 5,                 # optional number of chunks to retrieve (default 5, max 20)
-	  "docType": "License",      # optional filter (matches manifest doc_type exact / case-insensitive)
-	  "jurisdiction": "US-CA"    # optional filter (exact / case-insensitive)
-	}
-
-	Response JSON:
-	{
-	  "query": str,
-	  "answer": str | null,
-	  "matches": [ { "chunk_id", "doc_id", "section", "score", "preview" } ... ],
-	  "used_model": str | null,          # chat / completion model used for answer
-	  "embedding_model": str | null,
-	  "filters": { ... },
-	  "timing_ms": { "retrieval": int, "answer": int },
-	  "error": str (optional)
-	}
-
-	If the OpenAI client / key is unavailable, returns matches only (no generated answer).
-	"""
-	from time import time
-	import math
-	import sqlite3
-	import array
-
-	if not request.is_json:
-		return jsonify({"error": "Expected application/json"}), 400
-	payload = request.get_json(silent=True) or {}
-	question = (payload.get('query') or '').strip()
-	if not question:
-		return jsonify({"error": "'query' is required"}), 400
-
-	max_q_len = int(os.getenv('MAX_QUERY_LENGTH', '1000'))
-	if len(question) > max_q_len:
-		return jsonify({"error": f"query too long (>{max_q_len} chars)"}), 400
-
-	top_k = payload.get('top_k') or 5
-	try:
-		top_k = int(top_k)
-	except Exception:
-		return jsonify({"error": "top_k must be int"}), 400
-	if top_k <= 0:
-		top_k = 5
-	if top_k > 20:
-		top_k = 20
-
-	filter_doc_type = (payload.get('docType') or '').strip() or None
-	filter_juris = (payload.get('jurisdiction') or '').strip() or None
-
-	# Load manifest metadata (doc_type / jurisdiction mapping)
-	manifest_map: dict[str, dict[str, str | None]] = {}
-	manifest_path = os.getenv('METADATA_FOLDER', None) or os.path.join(current_app.root_path, '.data/metadata')
-	manifest_file = os.path.join(manifest_path, 'manifest.jsonl')
-	if os.path.isfile(manifest_file):
-		try:
-			with open(manifest_file, 'r', encoding='utf-8') as mf:
-				for line in mf:
-					try:
-						obj = json.loads(line)
-						mid = obj.get('doc_id')
-						if mid:
-							manifest_map[mid] = {
-								'doc_type': obj.get('doc_type'),
-								'jurisdiction': obj.get('jurisdiction')
-							}
-					except Exception:
-						continue
-		except Exception as e:
-			logger.warning('Failed reading manifest: %s', e)
-
-	# Determine allowed doc_ids after filters
-	allowed_doc_ids = None  # None = no restriction
-	if filter_doc_type or filter_juris:
-		allowed_doc_ids = []
-		for did, meta in manifest_map.items():
-			if filter_doc_type and (meta.get('doc_type') or '').lower() != filter_doc_type.lower():
-				continue
-			if filter_juris and (meta.get('jurisdiction') or '').lower() != filter_juris.lower():
-				continue
-			allowed_doc_ids.append(did)
-		if allowed_doc_ids and len(allowed_doc_ids) == 0:
-			return jsonify({"query": question, "matches": [], "answer": None, "filters": {"docType": filter_doc_type, "jurisdiction": filter_juris}, "embedding_model": None, "used_model": None}), 200
-
-	db = get_db()
-
-	# Embedding model + client
-	embedding_model = os.getenv('EMBEDDING_MODEL', 'text-embedding-3-large')
-	try:
-		from openai import OpenAI  # type: ignore
-		api_key = os.getenv('OPENAI_API_KEY')
-		client = OpenAI(api_key=api_key) if api_key else None
-	except Exception:
-		client = None  # type: ignore
-
-	query_vec: list[float] | None = None
-	if client:
-		try:
-			qresp = client.embeddings.create(model=embedding_model, input=[question])  # type: ignore[attr-defined]
-			query_vec = qresp.data[0].embedding  # type: ignore
-		except Exception as e:
-			logger.error('Query embedding failed: %s', e)
-			query_vec = None
-
-	if query_vec is None:
-		# Cannot compute similarity without embedding; return error
-		return jsonify({"error": "embedding generation unavailable (missing openai client or key)", "query": question}), 500
-
-	def _deserialize(blob: bytes) -> list[float]:
-		arr = array.array('f')
-		arr.frombytes(blob)
-		return list(arr)
-
-	retrieval_start = time()
-	params: list[str] = []
-	where = ''
-	if allowed_doc_ids is not None:
-		if not allowed_doc_ids:  # no docs satisfy filter
-			return jsonify({"query": question, "matches": [], "answer": None, "filters": {"docType": filter_doc_type, "jurisdiction": filter_juris}}), 200
-		ph = ','.join(['?'] * len(allowed_doc_ids))
-		where = f'WHERE c.doc_id IN ({ph})'
-		params.extend(allowed_doc_ids)
-
-	rows: list[sqlite3.Row] = db.execute(
-		f'''SELECT e.chunk_id, e.vector, e.dim, c.doc_id, c.section, c.text
-			FROM embeddings e
-			JOIN chunks c ON c.chunk_id = e.chunk_id
-			{where}''', params).fetchall()
-
-	if not rows:
-		return jsonify({"query": question, "matches": [], "answer": None, "filters": {"docType": filter_doc_type, "jurisdiction": filter_juris}, "embedding_model": embedding_model}), 200
-
-	# Precompute norms
-	q_norm = math.sqrt(sum(v*v for v in query_vec)) or 1.0
-	scored: list[tuple[float, sqlite3.Row]] = []
-	for r in rows:
-		vec = _deserialize(r['vector'])
-		if len(vec) != r['dim']:
-			continue
-		vdot = sum(a*b for a,b in zip(query_vec, vec))
-		vnorm = math.sqrt(sum(x*x for x in vec)) or 1.0
-		cos = vdot / (q_norm * vnorm)
-		scored.append((cos, r))
-
-	# Select top_k
-	scored.sort(key=lambda x: x[0], reverse=True)
-	top = scored[:top_k]
-
-	# Get document titles for the matches
-	doc_ids_in_matches = list(set(r['doc_id'] for _, r in top))
-	doc_titles = {}
-	if doc_ids_in_matches:
-		title_rows = db.execute(
-			f"SELECT doc_id, title FROM documents WHERE doc_id IN ({','.join(['?'] * len(doc_ids_in_matches))})",
-			doc_ids_in_matches
-		).fetchall()
-		doc_titles = {row['doc_id']: row['title'] for row in title_rows}
-
-	matches = []
-	for score, r in top:
-		text_val = r['text']
-		preview = text_val[:300].replace('\n', ' ') + ('...' if len(text_val) > 300 else '')
-		doc_id = r['doc_id']
-		
-		# Get document title and doc_type
-		doc_title = doc_titles.get(doc_id, 'Unknown Title')
-		doc_meta = manifest_map.get(doc_id, {})
-		doc_type = doc_meta.get('doc_type', 'Unknown Type')
-		
-		matches.append({
-			'chunk_id': r['chunk_id'],
-			'doc_id': doc_id,
-			'doc_title': doc_title,
-			'doc_type': doc_type,
-			'section': r['section'],
-			'score': round(float(score), 5),
-			'preview': preview
-		})
-	retrieval_ms = int((time() - retrieval_start) * 1000)
-
-	# Build answer using chat model (optional)
-	answer_text = None
-	chat_model = os.getenv('OPENAI_MODEL', 'gpt-5')
-	answer_start = time()
-	if client and matches:
-		context_parts = []
-		for m in matches:
-			# fetch full text again from rows for reliability
-			for _s, r in top:
-				if r['chunk_id'] == m['chunk_id']:
-					context_parts.append(f"[Chunk {m['chunk_id']} section={m['section']}]\n{r['text']}\n")
-					break
-		context_text = '\n---\n'.join(context_parts)
-		prompt = (
-			"You are a legal assistant specialized in technology transactions. "
-			"Answer the user's question ONLY using the provided chunk context. "
-			"If the answer is not contained, say you cannot answer based on the corpus. "
-			"Cite relevant section numbers if present."
-		)
-		try:
-			resp = client.chat.completions.create(  # type: ignore[attr-defined]
-				model=chat_model,
-				messages=[
-					{"role": "system", "content": prompt},
-					{"role": "user", "content": f"Context:\n{context_text}\n\nQuestion: {question}"}
-				],
-				reasoning_effort="high",
-				verbosity="high"
-			)
-			answer_text = (resp.choices[0].message.content or '').strip() if resp.choices else None  # type: ignore
-		except Exception as e:
-			logger.error('Answer generation failed: %s', e)
-	answer_ms = int((time() - answer_start) * 1000) if answer_text is not None else 0
-
-	return jsonify({
-		'query': question,
-		'answer': answer_text,
-		'matches': matches,
-		'used_model': chat_model if answer_text else None,
-		'embedding_model': embedding_model,
-		'filters': {
-			'docType': filter_doc_type,
-			'jurisdiction': filter_juris
-		},
-		'timing_ms': {
-			'retrieval': retrieval_ms,
-			'answer': answer_ms
-		},
-		'total_candidates': len(rows)
-	}), 200
-
-@api_bp.route('/manifest', methods=['GET'])
-def get_manifest():
-	"""
-	Returns the contents of manifest.jsonl
-	"""
-	metadata_folder = os.getenv('METADATA_FOLDER', None) or os.path.join(current_app.root_path, '.data/metadata')
-	logger.info(f"Metadata folder: {metadata_folder}")
-	logger.info(f"OS environment METADATA_FOLDER: {os.getenv('METADATA_FOLDER', None)}")
-	manifest_file = os.path.join(metadata_folder, 'manifest.jsonl')
-	logger.info(f"Manifest file path: {manifest_file}")
-
-	if not os.path.isfile(manifest_file):
-		return jsonify([])
-
-	manifest_data = []
-	try:
-		with open(manifest_file, 'r', encoding='utf-8') as f:
-			for line in f:
-				manifest_data.append(json.loads(line))
-				logger.info(f"Loaded manifest entry: {manifest_data[-1]}")
-		logger.info(f"Total manifest entries loaded: {len(manifest_data)}")
-	except Exception as e:
-		logger.error(f"Failed to read manifest file: {e}")
-		return jsonify({"error": "Failed to read manifest file"}), 500
-
-	return jsonify(manifest_data)
-
-@api_bp.route('/manifest', methods=['POST'])
-def update_manifest():
-	"""
-	Updates manifest.jsonl with new data and propagates changes to chunks.jsonl.
-	"""
-	if not request.is_json:
-		return jsonify({"error": "Expected application/json"}), 400
-
-	new_manifest_data = request.get_json()
-
-	metadata_folder = os.getenv('METADATA_FOLDER', None) or os.path.join(current_app.root_path, '.data/metadata')
-	logger.info(f"Metadata folder for update: {metadata_folder}")
-	logger.info(f"OS environment METADATA_FOLDER: {os.getenv('METADATA_FOLDER', None)}")
-	manifest_file = os.path.join(metadata_folder, 'manifest.jsonl')
-	logger.info(f"Manifest file path for update: {manifest_file}")
-	chunks_file = os.path.join(metadata_folder, 'chunks.jsonl')
-	logger.info(f"Chunks file path for update: {chunks_file}")
-
-	# Propagate changes to chunks.jsonl
-	try:
-		if os.path.isfile(chunks_file):
-			with open(chunks_file, 'r', encoding='utf-8') as f:
-				chunks_data = [json.loads(line) for line in f]
-				logger.info(f"Loaded {len(chunks_data)} chunks for update")
-		else:
-			chunks_data = []
-
-		manifest_map = {
-			record['doc_id']: {
-				'doc_type': record.get('doc_type'),
-				'party_role': record.get('party_role'),
-				'jurisdiction': record.get('jurisdiction'),
-				'governing_law': record.get('governing_law'),
-				'industry': record.get('industry')
-			}
-			for record in new_manifest_data if 'doc_id' in record
-		}
-
-		for chunk in chunks_data:
-			if 'doc_id' in chunk and chunk['doc_id'] in manifest_map:
-				if 'metadata' not in chunk:
-					chunk['metadata'] = {}
-				chunk['metadata'].update(manifest_map[chunk['doc_id']])
-
-		with open(chunks_file, 'w', encoding='utf-8') as f:
-			for chunk in chunks_data:
-				f.write(json.dumps(chunk, ensure_ascii=False) + "\n")
-		logger.info("Propagated manifest changes to chunks.jsonl")
-	except Exception as e:
-		logger.error(f"Failed to propagate manifest changes to chunks.jsonl: {e}")
-
-	# Update manifest.jsonl
-	try:
-		with open(manifest_file, 'w', encoding='utf-8') as f:
-			for record in new_manifest_data:
-				f.write(json.dumps(record, ensure_ascii=False) + "\n")
-	except Exception as e:
-		logger.error(f"Failed to write to manifest file: {e}")
-		return jsonify({"error": "Failed to write to manifest file"}), 500
-
-	return jsonify({"message": "Manifest updated successfully and changes propagated"}), 200
-
-@api_bp.route('/chunks', methods=['GET'])
+@api_bp.route("/chunks", methods=["GET"])
 def get_chunks():
-    """
-    Returns the contents of chunks.jsonl
-    """
-    metadata_folder = os.getenv('METADATA_FOLDER', None) or os.path.join(current_app.root_path, '.data/metadata')
-    chunks_file = os.path.join(metadata_folder, 'chunks.jsonl')
-    
-    if not os.path.isfile(chunks_file):
-        return jsonify([])
-
-    chunks_data = []
+    """List chunks for a document: /chunks?doc_id=123"""
     try:
-        with open(chunks_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                chunks_data.append(json.loads(line))
-    except Exception as e:
-        logger.error(f"Failed to read chunks file: {e}")
-        return jsonify({"error": "Failed to read chunks file"}), 500
-    
-    return jsonify(chunks_data)
+        doc_id = int(request.args.get("doc_id", "0"))
+    except ValueError:
+        return jsonify({"error": "invalid doc_id"}), 400
+    if not doc_id:
+        return jsonify({"error": "doc_id required"}), 400
 
-@api_bp.route('/chunks', methods=['POST'])
-def update_chunks():
+    chunks = get_chunks_for_doc(doc_id)
+    out = [{
+        "chunk_id": c.chunk_id,
+        "doc_id": c.doc_id,
+        "chunk_index": c.chunk_index,
+        "token_count": c.token_count,
+        "tok_ver": c.tok_ver,
+        "seg_ver": c.seg_ver,
+        "text": (lambda _t: _t[:300] + ("..." if len(_t) > 300 else ""))(str(getattr(c, "text", "") or "")),
+    } for c in chunks]
+    return jsonify({"doc_id": doc_id, "count": len(out), "chunks": out}), 200
+
+
+@api_bp.route("/manifest", methods=["GET"])
+def get_manifest():
+    """Return manifest.jsonl lines for a document if present on local storage for compatibility."""
+    doc_id = request.args.get("doc_id")
+    if not doc_id:
+        return jsonify({"error": "doc_id required"}), 400
+    _, _, meta_dir = _upload_dirs()
+    path = os.path.join(meta_dir, str(doc_id), "manifest.jsonl")
+    if not os.path.exists(path):
+        return jsonify({"doc_id": int(doc_id), "manifest": []}), 200
+    with open(path, "r", encoding="utf-8") as f:
+        lines = [json.loads(x) for x in f.read().splitlines() if x.strip()]
+    return jsonify({"doc_id": int(doc_id), "manifest": lines}), 200
+
+
+@api_bp.route("/embeddings/generate", methods=["POST"])
+def generate_embeddings_endpoint():
+    """Generate and store embeddings for all missing chunks of a document.
+
+    Request JSON: { "doc_id": int, "model": "text-embedding-3-large" }
+    Returns: { doc_id, model, generated }
     """
-    Updates chunks.jsonl with new data.
+    data = request.get_json(force=True) or {}
+    doc_id = data.get("doc_id")
+    model = data.get("model") or os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
+    if not doc_id:
+        return jsonify({"error": "doc_id required"}), 400
+    try:
+        generated = generate_and_store_embeddings(doc_id=str(doc_id), model=model)
+        return jsonify({"doc_id": int(doc_id), "model": model, "generated": generated}), 200
+    except Exception as e:
+        logger.exception("Embedding generation failed: %s", e)
+        return jsonify({"error": "failed to generate embeddings"}), 500
+
+
+@api_bp.route("/query", methods=["POST"])
+def query():
+    """Placeholder RAG query that delegates ANN to Vertex AI Vector Search if available.
+
+    Request JSON: { "query": str, "top_k": int, "filters": {...} }
     """
-    if not request.is_json:
-        return jsonify({"error": "Expected application/json"}), 400
-    
-    new_data = request.get_json()
-    
-    metadata_folder = os.getenv('METADATA_FOLDER', None) or os.path.join(current_app.root_path, '.data/metadata')
-    chunks_file = os.path.join(metadata_folder, 'chunks.jsonl')
+    payload = request.get_json(force=True) or {}
+    question = payload.get("query")
+    top_k = int(payload.get("top_k", 5))
+    if not question:
+        return jsonify({"error": "query required"}), 400
+
+    # Vertex AI Vector Search Integration
+    project_id = os.getenv("VERTEX_PROJECT_ID")
+    location = os.getenv("VERTEX_REGION")
+    index_endpoint_id = os.getenv("VERTEX_INDEX_ENDPOINT_ID")
+    deployed_index_id = os.getenv("VERTEX_DEPLOYED_INDEX_ID")
+
+    if not all([project_id, location, index_endpoint_id, deployed_index_id]):
+        logger.error("Vertex AI environment variables not configured.")
+        return jsonify({"error": "Vector search is not configured."}), 501
+
+    approx_multiplier = payload.get("approx_multiplier")
+    approx_count = payload.get("approx_count")
 
     try:
-        with open(chunks_file, 'w', encoding='utf-8') as f:
-            for record in new_data:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        # Prefer advanced function for approximate neighbor tuning
+        neighbors = find_nearest_neighbors_advanced(
+            project_id=str(project_id),
+            location=str(location),
+            index_endpoint_id=str(index_endpoint_id),
+            deployed_index_id=str(deployed_index_id),
+            query=question,
+            num_neighbors=top_k,
+            approx_multiplier=float(approx_multiplier) if approx_multiplier is not None else None,
+            approx_count=int(approx_count) if approx_count is not None else None,
+        )
+        if not neighbors:  # Fallback to legacy if empty (e.g., advanced client unavailable)
+            neighbors = find_nearest_neighbors(
+                project_id=str(project_id),
+                location=str(location),
+                index_endpoint_id=str(index_endpoint_id),
+                deployed_index_id=str(deployed_index_id),
+                query=question,
+                num_neighbors=top_k,
+            )
+
+        if not neighbors:
+            return jsonify({"query": question, "results": []}), 200
+
+        neighbor_ids = [int(n_id) for n_id, _ in neighbors]
+        chunks = get_chunks_by_ids(neighbor_ids)
+        # Create a mapping from chunk_id to text (normalize key to int)
+        chunk_map = {int(getattr(chunk, "chunk_id")): getattr(chunk, "text", "") for chunk in chunks}
+
+        results = []
+        for n_id, dist in neighbors:
+            try:
+                cid = int(n_id)
+            except (TypeError, ValueError):
+                continue
+            results.append({
+                "chunk_id": cid,
+                "text": chunk_map.get(cid, ""),
+                "distance": dist,
+            })
+
+        return jsonify({"query": question, "results": results}), 200
+
     except Exception as e:
-        logger.error(f"Failed to write to chunks file: {e}")
-        return jsonify({"error": "Failed to write to chunks file"}), 500
-        
-    return jsonify({"message": "Chunks updated successfully"}), 200
+        logger.exception("Vector search query failed: %s", e)
+        return jsonify({"error": "Failed to execute vector search."}), 500
+
+
+# Health
+@api_bp.route("/healthz", methods=["GET"])
+def healthz():
+    try:
+        init_db()  # idempotent
+        return jsonify({"ok": True}), 200
+    except Exception as e:
+        logger.exception("health check failed: %s", e)
+        return jsonify({"ok": False}), 500
