@@ -11,44 +11,81 @@
 ############################################################
 
 steps:
-  - name: gcr.io/cloud-builders/docker
-    id: Build
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
     args:
-      - build
-      - --pull
-      - --platform=linux/amd64            # Ensures compatibility when developing on Apple Silicon
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_IMAGE_NAME}:$COMMIT_SHA
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_IMAGE_NAME}:latest
-      - .
+      - '-c'
+      - |
+        gcloud artifacts repositories describe ${_REPO_NAME} --location=${_REGION}  --project=$PROJECT_ID &> /dev/null
+        if [ $$? -ne 0 ]; then
+          echo "Respository '${_REPO_NAME}' does not exist. Creating..."
+          gcloud artifacts repositories create ${_REPO_NAME} \
+            --repository-format=docker \
+            --location=${_REGION} \
+            --description="Docker repository for techtrans-rag" \
+            --project=$PROJECT_ID
+        else
+          echo "Repository '${_REPO_NAME}' already exists. Skipping creation."
+        fi
+    id: 'create-repo'
+
+  - name: gcr.io/cloud-builders/docker
+    id: 'build'
+    waitFor:
+      - 'create-repo'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_IMAGE_NAME}:$COMMIT_SHA'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_IMAGE_NAME}:latest'
+      - '.'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push'
+    args:
+      - 'push'
+      - '--all-tags'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_IMAGE_NAME}'
     # (Optional) Enable Docker BuildKit for faster builds / better caching:
     # env:
     #   - DOCKER_BUILDKIT=1
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    id: Deploy
     entrypoint: gcloud
     args:
-      - run
-      - deploy
-      - tech-trans-rag
-      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_IMAGE_NAME}:$COMMIT_SHA
-      - --region=${_REGION}
-      - --platform=managed
-      - --allow-unauthenticated
+      - 'run'
+      - 'deploy'
+      - 'tech-trans-rag'
+      - '--image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_IMAGE_NAME}:$COMMIT_SHA'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - 'service-account=886212214866-compute@developer.gserviceaccount.com'
+      - '--port=8080'
+      - 'cpu=1'
+      - 'memory=1Gi'
+      - 'min-instances=0'
+      - 'max-instances=10'
+      - '--timeout=900'
+      - 'concurrency=80'
+    id: 'deploy-cloud-run'
+    waitFor:
+      - 'push'
 
-# The images section tells Cloud Build to automatically push these tags
-images:
-  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_IMAGE_NAME}:$COMMIT_SHA
-  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_IMAGE_NAME}:latest
+serviceAccount: 'projects/tech-trans-rag/serviceAccounts/886212214866-compute@developer.gserviceaccount.com'
 
-substitutions:
-  _REGION: us-west2
-  _REPO_NAME: aonanj/techtrans-rag
-  _IMAGE_NAME: tech-trans-rag
-
+# Build options
 options:
-  logging: CLOUD_LOGGING_ONLY
+  logging: 'CLOUD_LOGGING_ONLY'
+  substitutionOption: 'ALLOW_LOOSE'
+  diskSizeGb: '100'
 
-# Increase if dependency builds or OCR libs make image slow to build
-timeout: "1800s"
+# Timeout for the entire build
+timeout: '1800s'
+
+# Optional substitutions (safe to leave)
+substitutions:
+  _SERVICE_NAME: 'tech-trans-rag'
+  _REGION: 'us-west2'
+  _REPO_NAME: 'techtrans-rag'
+  _IMAGE_NAME: 'tech-trans-rag'
