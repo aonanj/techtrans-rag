@@ -60,7 +60,7 @@ steps:
       - '--region=${_REGION}'
       - '--platform=managed'
       - '--allow-unauthenticated'
-      - 'service-account=886212214866-compute@developer.gserviceaccount.com'
+      - '--service-account=886212214866-compute@developer.gserviceaccount.com'
       - '--port=8080'
       - 'cpu=1'
       - 'memory=1Gi'
