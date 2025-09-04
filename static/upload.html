@@ -368,17 +368,14 @@
             uploadButton.disabled = true;
             uploadResult.style.display = 'none';
 
-            // TODO: Replace this section with actual endpoint implementation
             try {
-                // Simulate upload progress
-                // Build FormData with the field name expected by the Flask route ('file')
+
                 formData = new FormData();
                 formData.append('file', selectedFileObj);
 
-                // Basic fake progress animation while waiting for network (optional)
                 let fakeProgress = 0;
                 const fakeInterval = setInterval(() => {
-                    if (fakeProgress < 90) { // cap before completion
+                    if (fakeProgress < 90) {
                         fakeProgress += 5;
                         progressBar.style.width = fakeProgress + '%';
                         progressText.textContent = `Uploading... ${fakeProgress}%`;
@@ -431,8 +428,7 @@
                 return;
             }
 
-            // Validate file size (10MB limit)
-            const maxSize = 10 * 1024 * 1024; // 10MB in bytes
+            const maxSize = 10 * 1024 * 1024; 
             if (file.size > maxSize) {
                 showResult('File size must be less than 10MB.', 'error');
                 return;
