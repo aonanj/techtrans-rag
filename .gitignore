@@ -132,6 +132,3 @@ data_level0.bin
 .envrc
 .vagrant/
 data/index/2205247c-3a6e-4a8f-a910-ad8bbed4ed82/data_level0.bin
-manifest.jsonl
-chunks.jsonl
-data/metadata/manifest.jsonl
