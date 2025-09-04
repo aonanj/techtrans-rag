@@ -275,7 +275,7 @@
     <div class="upload-container">
         <h2 class="upload-title">Document Upload</h2>
         <p class="upload-description">
-            Upload technology transaction document (pdf, txt, or docx; max 10MB)
+            Upload a technology transactions document (pdf, txt, or docx; max 10MB)
         </p>
         
         <form id="uploadForm" enctype="multipart/form-data">
@@ -350,10 +350,7 @@
 
         // Remove file handler
         removeFile.addEventListener('click', () => {
-            selectedFileObj = null;
-            fileInput.value = '';
-            selectedFile.classList.remove('visible');
-            uploadButton.classList.remove('visible');
+            clearFileSelection();
             uploadResult.style.display = 'none';
         });
 
@@ -366,9 +363,9 @@
                 return;
             }
 
-            // Show progress
-            progressContainer.classList.add('visible');
+            // Disable button and show progress
             uploadButton.disabled = true;
+            progressContainer.classList.add('visible');
             uploadResult.style.display = 'none';
 
             try {
@@ -404,6 +401,7 @@
                 progressBar.style.width = '100%';
                 progressText.textContent = 'Upload complete';
                 showResult('Document uploaded successfully!', 'success');
+                clearFileSelection();
 
             } catch (error) {
                 console.error('Upload error:', error);
@@ -421,6 +419,13 @@
             if (file) {
                 handleFile(file);
             }
+        }
+
+        function clearFileSelection() {
+            selectedFileObj = null;
+            fileInput.value = '';
+            selectedFile.classList.remove('visible');
+            uploadButton.classList.remove('visible');
         }
 
         function handleFile(file) {

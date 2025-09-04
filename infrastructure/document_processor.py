@@ -53,7 +53,7 @@ def extract_text_content(file_path):
         client = OpenAI(api_key=API_KEY)
         prompt = (
             f"""
-            Examine the attached technology transaction document and then identify respective values for each of the following keys: source_url (url of the document), license, type of technology transaction document (doc_type, use only one or two words, use abbreviations where appropriate), the role of the party or parties (use only the roles, e.g., licensor, licensee; do not include the names of the parties), the jurisdiction, the governing law, the industry (use only one or two words), and the effective date of the agreement. Consider the substantive meaning of words (e.g., "Page 1 of 12" is not likely to be the license), placement in the document, surrounding text, applicable section, and any other factors that might inform your decision. Use standard legal abbreviations for the jurisdiction and governing law (e.g., US-CA for California state law, US-FED for US federal law, etc.). Format the date in a string "YYYY-MM-DD".
+            Examine the attached technology transactions document and then identify respective values for each of the following keys: source_url (url of the document), license, type of technology transactions document (doc_type, use only one or two words, use abbreviations where appropriate), the role of the party or parties (use only the roles, e.g., licensor, licensee; do not include the names of the parties), the jurisdiction, the governing law, the industry (use only one or two words), and the effective date of the agreement. Consider the substantive meaning of words (e.g., "Page 1 of 12" is not likely to be the license), placement in the document, surrounding text, applicable section, and any other factors that might inform your decision. Use standard legal abbreviations for the jurisdiction and governing law (e.g., US-CA for California state law, US-FED for US federal law, etc.). Format the date in a string "YYYY-MM-DD".
             Return a response in following JSON format only: 
             {{
                 "source_url": source_url, 
@@ -77,7 +77,7 @@ def extract_text_content(file_path):
         response = client.chat.completions.create(
             model=ai_model,
             messages=[
-                {"role": "system", "content": "Extract the document's source_url, license, type of technology transaction document, the role of the party or parties, the jurisdiction, the governing law, the industry, and the version or effective date based from the following text.\n"},
+                {"role": "system", "content": "Extract the document's source_url, license, type of technology transactions document, the role of the party or parties, the jurisdiction, the governing law, the industry, and the version or effective date based from the following text.\n"},
                 {"role": "user", "content": prompt},
             ]
         )
@@ -171,7 +171,7 @@ def extract_title(text: str) -> str:
         client = OpenAI(api_key=API_KEY)
         prompt = (
             f"""
-            Examine the attached technology transaction document and then identify the title. Consider the substantive meaning of words (e.g., "Page 1 of 12" is not likely to be the title), placement in the document, proximity to the beginning of the document, case of the letters, length, justficiation, and any other factors that might inform your decision. Return only the title, with no other characters. If you cannot confidently identify a distinct value for any field, respond with Unknown."
+            Examine the attached technology transactions document and then identify the title. Consider the substantive meaning of words (e.g., "Page 1 of 12" is not likely to be the title), placement in the document, proximity to the beginning of the document, case of the letters, length, justficiation, and any other factors that might inform your decision. Return only the title, with no other characters. If you cannot confidently identify a distinct value for any field, respond with Unknown."
             --- PAGE TEXT START ---\n
             {text}\n
             --- PAGE TEXT END ---

@@ -214,7 +214,7 @@ def extract_chunk_content(file_path, chunk_text):
 		client = OpenAI(api_key=api_key)
 		prompt = (
 			f"""
-			Examine the attached technology transaction document and then identify respective values for each of the following keys for the chunk: section_number (section of this chunk, including any subsections, paragraphs, etc.; e.g., 5.B), section_title (section or subsection title of this chunk), clause_type (type of clause of this chunk), path (section path to this chunk, including any parent subsections, paragraphs levels, etc.; e.g., for section_number 9.B.(vi)(a), the path would be 9 ➞ 9.B ➞ 9.B.(vi) ➞ 9.B.(vi)(a)), numbers_present (boolean indicating if section, subsection, and/or paragraph numbers are present in this chunk), definition_terms (list of terms defined in this chunk).
+			Examine the attached technology transactions document and then identify respective values for each of the following keys for the chunk: section_number (section of this chunk, including any subsections, paragraphs, etc.; e.g., 5.B), section_title (section or subsection title of this chunk, include "Exhibit" if applicable), clause_type (type of clause of this chunk), path (section path to this chunk, including any parent subsections, paragraphs levels, etc.; e.g., for section_number 9.B.(vi)(a), the path would be 9 ➞ 9.B ➞ 9.B.(vi) ➞ 9.B.(vi)(a)), numbers_present (boolean indicating if section, subsection, and/or paragraph numbers are present in this chunk), definition_terms (list of terms defined in this chunk).
 			Return a response in following JSON format ONLY (use null where unknown, ensure valid JSON):\n
 			{{
 			  "section_number": null,
