@@ -28,7 +28,7 @@ SQLAlchemy>=2.0.0,<3
 # --- Google Cloud AI / Logging ---
 google-cloud-aiplatform>=1.58.0
 google-cloud-logging>=3.10.0,<4
-cloud-sql-python-connector>=1.16.0
+cloud-sql-python-connector[pg8000]>=1.16.0
 
 # --- Server ---
 gunicorn>=23.0.0
