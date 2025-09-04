@@ -1,12 +1,36 @@
+############################################################
+# Production dependencies for techtrans-rag
+#
+# Style: liberal upper bounds to avoid unexpected breaking majors
+# Missing libs added: SQLAlchemy (used in infrastructure/database.py)
+#                     google-cloud-logging (optional structured logging)
+# Removed: uvicorn (not imported; Gunicorn used in Docker CMD)
+############################################################
+
+# --- Web framework & middleware ---
 Flask>=2.2.0,<4
 Flask-Cors>=3.0.0,<5
 python-dotenv>=0.21.0,<2
+
+# --- Model / LLM / Tokenization ---
 openai>=1.102.0
-gunicorn>=23.0.0
-PyMuPDF>=1.20.0,<2
+tiktoken>=0.4.0,<1
+
+# --- Document & OCR processing ---
+PyMuPDF>=1.20.0,<2          # import fitz
 Pillow>=9.0.0,<11
 pytesseract>=0.3.10,<1
 docx2txt>=0.8,<1
-tiktoken>=0.4.0,<1
-uvicorn>=0.35.0
+
+# --- Data & Persistence ---
+SQLAlchemy>=2.0.0,<3
+
+# --- Google Cloud AI / Logging ---
 google-cloud-aiplatform>=1.58.0
+google-cloud-logging>=3.10.0,<4
+
+# --- Server ---
+gunicorn>=23.0.0
+
+# (Optional) Dev/test tools could go in a separate requirements-dev.txt
+# e.g.: pytest, mypy, black, isort, types-* stubs

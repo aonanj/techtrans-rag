@@ -1,0 +1,54 @@
+############################################################
+# Cloud Build configuration for techtrans-rag
+#
+# Builds and pushes a container image to Artifact Registry
+# with two tags: immutable commit SHA and moving 'latest'.
+#
+# Customize via substitutions or override at submit time:
+#   gcloud builds submit \
+#     --config=cloudbuild.yaml \\
+#     --substitutions=_REGION=us-central1,_REPO_NAME=techtrans-rag-repo,_IMAGE_NAME=techtrans-rag-app
+############################################################
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    id: Build
+    args:
+      - build
+      - --pull
+      - --platform=linux/amd64            # Ensures compatibility when developing on Apple Silicon
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_IMAGE_NAME}:$COMMIT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_IMAGE_NAME}:latest
+      - .
+    # (Optional) Enable Docker BuildKit for faster builds / better caching:
+    # env:
+    #   - DOCKER_BUILDKIT=1
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    id: Deploy
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - tech-trans-rag
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_IMAGE_NAME}:$COMMIT_SHA
+      - --region=${_REGION}
+      - --platform=managed
+      - --allow-unauthenticated
+
+# The images section tells Cloud Build to automatically push these tags
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_IMAGE_NAME}:$COMMIT_SHA
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO_NAME}/${_IMAGE_NAME}:latest
+
+substitutions:
+  _REGION: us-central1
+  _REPO_NAME: techtrans-rag-repo
+  _IMAGE_NAME: techtrans-rag-app
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+# Increase if dependency builds or OCR libs make image slow to build
+timeout: "1800s"
