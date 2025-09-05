@@ -30,7 +30,7 @@ from infrastructure.chunker import chunk_doc
 from infrastructure.vector_search import find_nearest_neighbors
 from infrastructure.database import get_chunks_by_ids
 
-api_bp = Blueprint("api", __name__)
+api_bp = Blueprint("api", __name__, url_prefix="/api")
 logger = get_logger()
 
 # ---------------------------------------------------------------------------

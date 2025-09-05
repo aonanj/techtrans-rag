@@ -1,4 +1,3 @@
-// ...existing code...
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -288,6 +287,17 @@
                 <!-- Added name="file" so the backend sees the expected field name -->
                 <input type="file" id="fileInput" name="file" class="file-input" accept=".pdf,.docx,.txt" />
             </div>
+
+            <div style="display:flex; gap:16px; width:100%; margin-top:18px;">
+                <div style="flex:1; display:flex; flex-direction:column; gap:6px;">
+                    <label for="docType" style="font-size:0.8rem; text-transform:uppercase; letter-spacing:1px; color:#ccc;">Document Type (optional)</label>
+                    <input id="docType" name="doc_type" type="text" maxlength="128" placeholder="e.g., License Agreement" style="background:#222; border:2px solid #555; border-radius:8px; padding:10px; color:#fff; font-family:inherit; font-size:0.85rem;" />
+                </div>
+                <div style="flex:1; display:flex; flex-direction:column; gap:6px;">
+                    <label for="jurisdiction" style="font-size:0.8rem; text-transform:uppercase; letter-spacing:1px; color:#ccc;">Jurisdiction (optional)</label>
+                    <input id="jurisdiction" name="jurisdiction" type="text" maxlength="64" placeholder="e.g., US-CA" style="background:#222; border:2px solid #555; border-radius:8px; padding:10px; color:#fff; font-family:inherit; font-size:0.85rem;" />
+                </div>
+            </div>
             
             <div class="selected-file" id="selectedFile">
                 <div class="file-info">
@@ -373,6 +383,10 @@
 
             const formData = new FormData();
             formData.append('file', selectedFileObj);
+            const dt = document.getElementById('docType').value.trim();
+            const jur = document.getElementById('jurisdiction').value.trim();
+            if (dt) formData.append('doc_type', dt);
+            if (jur) formData.append('jurisdiction', jur);
 
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '/api/upload', true);
@@ -405,7 +419,9 @@
                     const docId = responseJson.doc_id ? `Doc ID: ${responseJson.doc_id}` : '';
                     const sha = responseJson.sha256 ? `SHA256: ${responseJson.sha256}` : '';
                     const title = responseJson.title ? `Title: ${responseJson.title}` : '';
-                    const msgParts = ['Document uploaded successfully!', docId, title, sha].filter(Boolean);
+                    const dtEcho = responseJson.doc_type ? `Type: ${responseJson.doc_type}` : '';
+                    const jurEcho = responseJson.jurisdiction ? `Jurisdiction: ${responseJson.jurisdiction}` : '';
+                    const msgParts = ['Document uploaded successfully!', docId, title, dtEcho, jurEcho, sha].filter(Boolean);
                     showResult(msgParts.join(' — '), 'success');
                     // Keep note about indexing in case embeddings are generated async
                     const indexingNote = document.createElement('div');
