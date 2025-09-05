@@ -196,10 +196,9 @@ def get_chunks():
         "token_count": c.token_count,
         "tok_ver": c.tok_ver,
         "seg_ver": c.seg_ver,
-        "text": (lambda _t: _t[:300] + ("..." if len(_t) > 300 else ""))(str(getattr(c, "text", "") or "")),
+        "text": str(getattr(c, "text", "") or ""),
     } for c in chunks]
     return jsonify({"doc_id": doc_id, "count": len(out), "chunks": out}), 200
-
 
 @api_bp.route("/documents", methods=["GET"])
 def list_documents():
@@ -254,7 +253,7 @@ def list_all_chunks():
             "token_count": c.token_count,
             "tok_ver": c.tok_ver,
             "seg_ver": c.seg_ver,
-            "text": (lambda _t: _t[:300] + ("..." if len(_t) > 300 else ""))(str(getattr(c, 'text', '') or '')),
+            "text": str(getattr(c, 'text', '') or ''),
             "doc_type": getattr(doc, 'doc_type', None) if doc else None,
             "jurisdiction": getattr(doc, 'jurisdiction', None) if doc else None,
             "title": getattr(doc, 'title', None) if doc else None,

@@ -217,46 +217,66 @@
             if(!subset.length){ tableWrapper.innerHTML='<div class="empty">No chunks match filters.</div>'; return; }
             const columns=["chunk_id","chunk_index","token_count","tok_ver","seg_ver","text"];
             let html='<table class="data-table"><thead><tr>'+columns.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead><tbody>';
-            html+= subset.map(r=>'<tr>'+columns.map(c=>{
-                let val=r[c]; if(val==null) val=''; let display=String(val); if(c==='text' && display.length>240) display=display.slice(0,240)+'…';
+            html+= subset.map(r=>'<tr data-chunk="'+esc(r.chunk_id)+'">'+columns.map(c=>{
+                let val=r[c]; if(val==null) val=''; let display=String(val);
+                if(c==='text'){
+                    const full=display; const trunc=full.length>240?full.slice(0,240)+'…':full;
+                    return `<td data-text="1" data-full="${esc(full)}" data-trunc="${esc(trunc)}" data-expanded="0" class="${trunc!==full?'truncate':''}" title="Click row to toggle full text">${esc(trunc)}</td>`;
+                }
+                if(display.length>120) display=display.slice(0,120)+'…';
                 return `<td class="${display!==String(val)?'truncate':''}" title="${esc(String(val))}">${esc(display)}</td>`;
             }).join('')+'</tr>').join('');
             html+='</tbody></table>';
             tableWrapper.innerHTML=html;
+            attachExpandHandlers();
         }
 
         function renderChunk(ch){
-            const truncated = (ch.text||'').length>800 ? (ch.text.slice(0,800)+'…') : ch.text;
-            const needsExpand = truncated !== ch.text;
+            const full = ch.text||'';
+            const truncated = full.length>800? full.slice(0,800)+'…' : full;
             const metaTags = [];
             metaTags.push(`<span class='tag'>Idx ${esc(ch.chunk_index)}</span>`);
             if(ch.token_count!=null) metaTags.push(`<span class='tag'>Tok ${esc(ch.token_count)}</span>`);
             if(ch.section) metaTags.push(`<span class='tag'>Sec</span>`);
-            return `<div class='chunk' data-chunk='${esc(ch.chunk_id)}'>
+            return `<div class='chunk' data-chunk='${esc(ch.chunk_id)}' data-expanded='0'>
                 <h3>Chunk ${esc(ch.chunk_id)}</h3>
                 <div class='meta-row'>${metaTags.join('')}</div>
-                <div class='text${needsExpand?'':' expanded'}' data-full='${esc(ch.text||'')}' data-trunc='${esc(truncated)}'>${esc(truncated)}</div>
-                ${needsExpand?'<button class="expand-btn" type="button">Expand</button>':''}
+                <div class='text' data-full='${esc(full)}' data-trunc='${esc(truncated)}'>${esc(truncated)}</div>
             </div>`;
         }
 
         function attachExpandHandlers(){
-            chunksEl.querySelectorAll('.expand-btn').forEach(btn=>{
-                btn.addEventListener('click',()=>{
-                    const wrapper = btn.closest('.chunk');
-                    const textDiv = wrapper.querySelector('.text');
+            // Card mode
+            chunksEl.querySelectorAll('.chunk').forEach(div=>{
+                div.addEventListener('click',()=>{
+                    const textDiv = div.querySelector('.text');
                     if(!textDiv) return;
-                    if(textDiv.classList.contains('expanded')){
-                        textDiv.classList.remove('expanded');
-                        textDiv.textContent = textDiv.getAttribute('data-trunc');
-                        btn.textContent='Expand';
-                    } else {
-                        textDiv.classList.add('expanded');
+                    const expanded = textDiv.classList.toggle('expanded');
+                    if(expanded){
                         textDiv.textContent = textDiv.getAttribute('data-full');
-                        btn.textContent='Collapse';
+                        div.dataset.expanded='1';
+                    } else {
+                        textDiv.textContent = textDiv.getAttribute('data-trunc');
+                        div.dataset.expanded='0';
                     }
                 });
             });
+            // Table mode
+            if(tableWrapper.innerHTML){
+                tableWrapper.querySelectorAll('tbody tr').forEach(tr=>{
+                    tr.addEventListener('click',()=>{
+                        const cell = tr.querySelector('td[data-text]');
+                        if(!cell) return;
+                        if(cell.dataset.expanded==='1'){
+                            cell.textContent = cell.dataset.trunc;
+                            cell.dataset.expanded='0';
+                        } else {
+                            cell.textContent = cell.dataset.full;
+                            cell.dataset.expanded='1';
+                        }
+                    });
+                });
+            }
         }
 
         function buildPagination(pageCount){
