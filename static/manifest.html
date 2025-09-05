@@ -65,9 +65,9 @@
 <body>
     <div class="shell">
         <div class="panel">
-            <h1>Manifest Viewer</h1>
-            <p class="sub">Inspect stored manifest metadata written during upload. Provide a document ID to fetch <code>manifest.jsonl</code> records. Source: local filesystem (.data/uploads/metadata/&lt;doc_id&gt;/manifest.jsonl). For database schema view visit <a href="/db-status" target="_blank">/db-status</a>.</p>
-            <form id="queryForm" class="query" autocomplete="off">
+            <h1>Documents & Manifests</h1>
+            <p class="sub">Default view lists documents from the database with basic metadata & chunk counts. Select a row or enter an ID to view its <code>manifest.jsonl</code> records from local storage (.data/uploads/metadata/&lt;doc_id&gt;/manifest.jsonl).</p>
+            <form id="queryForm" class="query" autocomplete="off" style="margin-bottom:10px;">
                 <div>
                     <label for="docId">Document ID</label>
                     <input type="number" id="docId" name="docId" min="1" required placeholder="e.g., 12" />
@@ -84,10 +84,24 @@
             <div class="status" id="status"></div>
         </div>
 
-        <div class="panel results" id="resultsPanel" style="display:none;">
+        <div class="panel" id="documentsPanel">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;flex-wrap:wrap;">
+                <h2 style="font-size:1.2rem;margin:0;">Documents</h2>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <label style="font-size:.6rem;letter-spacing:1px;">Limit</label>
+                    <input type="number" id="docLimit" value="100" min="10" max="500" style="width:90px;" />
+                    <button type="button" id="refreshDocs" style="padding:8px 14px;font-size:.7rem;">Refresh</button>
+                </div>
+            </div>
+            <div class="table-wrapper" id="documentsTableWrapper" style="display:block;"></div>
+            <div class="status" id="docStatus"></div>
+        </div>
+
+        <div class="panel results" id="resultsPanel" style="display:none;margin-top:-10px;">
             <div class="view-toggles">
                 <button type="button" id="cardsMode" class="active">Records</button>
                 <button type="button" id="tableMode">Table</button>
+                <button type="button" id="backToDocs" style="margin-left:auto;">Back to Documents</button>
             </div>
             <div class="meta-grid" id="metaGrid"></div>
             <div class="records" id="records" style="display:block;"></div>
@@ -105,7 +119,13 @@
     const tableWrapper = document.getElementById('tableWrapper');
     const cardsModeBtn = document.getElementById('cardsMode');
     const tableModeBtn = document.getElementById('tableMode');
+    const backToDocsBtn = document.getElementById('backToDocs');
         const resultsPanel = document.getElementById('resultsPanel');
+    const documentsPanel = document.getElementById('documentsPanel');
+    const documentsTableWrapper = document.getElementById('documentsTableWrapper');
+    const docStatus = document.getElementById('docStatus');
+    const refreshDocsBtn = document.getElementById('refreshDocs');
+    const docLimitInput = document.getElementById('docLimit');
         const clearBtn = document.getElementById('clearBtn');
         const fetchBtn = document.getElementById('fetchBtn');
         let rawRecords = []; // full list
@@ -190,6 +210,47 @@
             });
         }
 
+        function fetchDocuments(){
+            const limit = Math.max(10, Math.min(500, parseInt(docLimitInput.value,10)||100));
+            docStatus.innerHTML = `<span class='inline'><span class='spinner'></span> Loading...</span>`;
+            fetch(`/api/documents?limit=${limit}`)
+              .then(r=>r.json())
+              .then(data => {
+                  const docs = Array.isArray(data.documents) ? data.documents : [];
+                  docStatus.textContent = docs.length ? `Loaded ${docs.length} document(s).` : 'No documents.';
+                  renderDocumentsTable(docs);
+              })
+              .catch(err => { docStatus.innerHTML = `<span class='error'>Failed: ${esc(err.message)}</span>`; });
+        }
+
+        function renderDocumentsTable(docs){
+            if(!docs.length){ documentsTableWrapper.innerHTML = '<div class="empty">No documents found.</div>'; return; }
+            const cols = ["doc_id","title","doc_type","jurisdiction","chunk_count","created_at","sha256"];
+            let html = '<table class="data-table"><thead><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead><tbody>';
+            html += docs.map(d=>'<tr data-doc="'+esc(d.doc_id)+'">'+cols.map(c=>{
+                let v=d[c]; if(v==null) v=''; let disp=String(v); if(disp.length>120) disp=disp.slice(0,120)+'…';
+                return `<td class="${disp!==String(v)?'truncate':''}" title="${esc(String(v))}">${esc(disp)}</td>`;
+            }).join('')+'</tr>').join('');
+            html+='</tbody></table>';
+            documentsTableWrapper.innerHTML=html;
+            documentsTableWrapper.querySelectorAll('tbody tr').forEach(tr=>{
+                tr.addEventListener('click',()=>{
+                    const did = tr.getAttribute('data-doc');
+                    if(did){ docIdInput.value = did; showManifestView(); fetchManifest(did); }
+                });
+            });
+        }
+
+        function showManifestView(){
+            documentsPanel.style.display='none';
+            resultsPanel.style.display='block';
+        }
+
+        function showDocuments(){
+            resultsPanel.style.display='none';
+            documentsPanel.style.display='block';
+        }
+
         function fetchManifest(docId){
             spinner();
             fetch(`/api/manifest?doc_id=${encodeURIComponent(docId)}`)
@@ -225,10 +286,15 @@
             rawRecords=[]; metaGrid.innerHTML=''; recordsEl.innerHTML=''; resultsPanel.style.display='none'; setStatus('');
         });
 
-        // Auto-load if doc_id present in query string
-        const params = new URLSearchParams(window.location.search);
-        const qsId = params.get('doc_id');
-        if(qsId){ docIdInput.value = qsId; fetchManifest(qsId); }
+    backToDocsBtn.addEventListener('click', showDocuments);
+    refreshDocsBtn.addEventListener('click', fetchDocuments);
+    docLimitInput.addEventListener('change', fetchDocuments);
+
+    // Initial load: list documents unless doc_id pre-specified
+    const params = new URLSearchParams(window.location.search);
+    const qsId = params.get('doc_id');
+    if(qsId){ docIdInput.value = qsId; showManifestView(); fetchManifest(qsId); }
+    else { fetchDocuments(); }
     </script>
 </body>
 </html>

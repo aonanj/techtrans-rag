@@ -60,8 +60,8 @@
 <body>
     <div class="shell">
         <div class="panel">
-            <h1>Chunks Viewer</h1>
-            <p class="sub">Inspect chunk records stored in the database. Provide a document ID to list its chunks via <code>/api/chunks?doc_id=&lt;id&gt;</code>. Text is truncated; expand individual chunks to view full content.</p>
+            <h1>Chunks Explorer</h1>
+            <p class="sub">Default view lists a paginated slice of all chunks (<code>/api/chunks/all</code>). Enter or select a document ID to view only that document's chunks via <code>/api/chunks?doc_id=&lt;id&gt;</code>.</p>
             <form id="queryForm" class="query" autocomplete="off">
                 <div>
                     <label for="docId">Document ID</label>
@@ -87,10 +87,13 @@
             <div class="status" id="status"></div>
         </div>
 
-        <div class="panel results" id="resultsPanel" style="display:none;">
-            <div class="view-toggles">
-                <button type="button" id="cardsMode" class="active">Cards</button>
-                <button type="button" id="tableMode">Table</button>
+        <div class="panel results" id="resultsPanel" style="display:block;">
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+                <div class="view-toggles">
+                    <button type="button" id="cardsMode" class="active">Cards</button>
+                    <button type="button" id="tableMode">Table</button>
+                </div>
+                <button type="button" id="globalMode" class="secondary" style="margin-left:auto;">Show All Chunks</button>
             </div>
             <div class="summary" id="summary"></div>
             <div class="chunks" id="chunks" style="display:block;"></div>
@@ -114,7 +117,8 @@
     const tableModeBtn = document.getElementById('tableMode');
         const paginationEl = document.getElementById('pagination');
         const clearBtn = document.getElementById('clearBtn');
-        const resultsPanel = document.getElementById('resultsPanel');
+    const resultsPanel = document.getElementById('resultsPanel');
+    const globalModeBtn = document.getElementById('globalMode');
 
         let rawChunks = [];
         let currentPage = 1;
@@ -123,7 +127,7 @@
         function setStatus(msg,isErr=false){statusEl.innerHTML = msg?`<span style="${isErr?'color:#ff7b7b;font-weight:600;':''}">${esc(msg)}</span>`:'';}
         function spinner(){setStatus(`<span style='display:inline-flex;align-items:center;gap:8px;'><span class="spinner"></span> Loading...</span>`);}
 
-        function fetchChunks(docId){
+    function fetchChunks(docId){
             spinner();
             fetch(`/api/chunks?doc_id=${encodeURIComponent(docId)}`)
                 .then(r=>r.json())
@@ -154,6 +158,21 @@
             Object.entries(meta).forEach(([k,v])=>{
                 summaryEl.insertAdjacentHTML('beforeend', `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`);
             });
+        }
+
+        function fetchAllChunks(){
+            setStatus('');
+            summaryEl.innerHTML='';
+            spinner();
+            const limit = Math.max(50, Math.min(500, parseInt(pageSizeInput.value,10)||200));
+            fetch(`/api/chunks/all?limit=${limit}`)
+              .then(r=>r.json())
+              .then(data => {
+                  rawChunks = Array.isArray(data.chunks)?data.chunks:[];
+                  setStatus(rawChunks.length?`Loaded ${rawChunks.length} chunk(s) (global slice).`:'No chunks.');
+                  currentPage=1; render();
+              })
+              .catch(err=>{ setStatus('Failed to load global chunks: '+err.message,true); });
         }
 
         function applyFilters(list){
@@ -249,13 +268,14 @@
             paginationEl.appendChild(makeBtn('Next',currentPage===pageCount,()=>{currentPage++;render();}));
         }
 
-        form.addEventListener('submit',e=>{e.preventDefault(); const id=docIdInput.value.trim(); if(!id){setStatus('Document ID required',true);return;} fetchChunks(id);});
+    form.addEventListener('submit',e=>{e.preventDefault(); const id=docIdInput.value.trim(); if(!id){setStatus('Document ID required',true);return;} fetchChunks(id);});
         clearBtn.addEventListener('click',()=>{docIdInput.value='';filterInput.value='';sectionFilter.value='';indexFilter.value='';rawChunks=[];resultsPanel.style.display='none';setStatus('');});
     [filterInput, sectionFilter, indexFilter, pageSizeInput].forEach(inp=>inp.addEventListener('input',()=>{currentPage=1;render();}));
     cardsModeBtn.addEventListener('click',()=>{ if(cardsModeBtn.classList.contains('active')) return; cardsModeBtn.classList.add('active'); tableModeBtn.classList.remove('active'); chunksEl.style.display='flex'; tableWrapper.style.display='none'; render(); });
     tableModeBtn.addEventListener('click',()=>{ if(tableModeBtn.classList.contains('active')) return; tableModeBtn.classList.add('active'); cardsModeBtn.classList.remove('active'); chunksEl.style.display='none'; tableWrapper.style.display='block'; render(); });
+    globalModeBtn.addEventListener('click',()=>{fetchAllChunks(); resultsPanel.style.display='block';});
 
-        const params = new URLSearchParams(window.location.search); const qsId = params.get('doc_id'); if(qsId){ docIdInput.value=qsId; fetchChunks(qsId); }
+    const params = new URLSearchParams(window.location.search); const qsId = params.get('doc_id'); if(qsId){ docIdInput.value=qsId; fetchChunks(qsId); } else { fetchAllChunks(); }
     </script>
 </body>
 </html>

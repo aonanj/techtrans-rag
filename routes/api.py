@@ -16,6 +16,9 @@ from infrastructure.database import (
     add_chunk,
     get_document_by_sha,
     get_chunks_for_doc,
+    get_documents,
+    get_document_chunk_counts,
+    get_all_chunks,
 )
 from infrastructure.embeddings import generate_and_store_embeddings, find_nearest_neighbors_advanced
 # Keep existing processing utilities
@@ -196,6 +199,67 @@ def get_chunks():
         "text": (lambda _t: _t[:300] + ("..." if len(_t) > 300 else ""))(str(getattr(c, "text", "") or "")),
     } for c in chunks]
     return jsonify({"doc_id": doc_id, "count": len(out), "chunks": out}), 200
+
+
+@api_bp.route("/documents", methods=["GET"])
+def list_documents():
+    """List documents with pagination and basic counts.
+
+    Query params:
+      limit (default 100, max 500)
+      offset (default 0)
+    """
+    try:
+        limit = int(request.args.get("limit", 100))
+        offset = int(request.args.get("offset", 0))
+    except ValueError:
+        return jsonify({"error": "invalid pagination"}), 400
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    docs = get_documents(limit=limit, offset=offset)
+    ids = [int(getattr(d, 'doc_id')) for d in docs]
+    counts = get_document_chunk_counts(ids)
+    out = []
+    for d in docs:
+        out.append({
+            "doc_id": int(getattr(d, 'doc_id')),
+            "title": d.title,
+            "sha256": d.sha256,
+            "doc_type": getattr(d, "doc_type", None),
+            "jurisdiction": getattr(d, "jurisdiction", None),
+            "created_at": d.created_at.isoformat() if getattr(d, 'created_at', None) else None,
+            "chunk_count": counts.get(int(getattr(d, 'doc_id')), 0),
+        })
+    return jsonify({"documents": out, "count": len(out), "limit": limit, "offset": offset}), 200
+
+
+@api_bp.route("/chunks/all", methods=["GET"])
+def list_all_chunks():
+    """List global chunks slice (paginated). Query params: limit (<=500), offset."""
+    try:
+        limit = int(request.args.get("limit", 200))
+        offset = int(request.args.get("offset", 0))
+    except ValueError:
+        return jsonify({"error": "invalid pagination"}), 400
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    rows = get_all_chunks(limit=limit, offset=offset)
+    out = []
+    for c in rows:
+        doc = getattr(c, 'document', None)
+        out.append({
+            "chunk_id": c.chunk_id,
+            "doc_id": c.doc_id,
+            "chunk_index": c.chunk_index,
+            "token_count": c.token_count,
+            "tok_ver": c.tok_ver,
+            "seg_ver": c.seg_ver,
+            "text": (lambda _t: _t[:300] + ("..." if len(_t) > 300 else ""))(str(getattr(c, 'text', '') or '')),
+            "doc_type": getattr(doc, 'doc_type', None) if doc else None,
+            "jurisdiction": getattr(doc, 'jurisdiction', None) if doc else None,
+            "title": getattr(doc, 'title', None) if doc else None,
+        })
+    return jsonify({"chunks": out, "count": len(out), "limit": limit, "offset": offset}), 200
 
 
 @api_bp.route("/manifest", methods=["GET"])

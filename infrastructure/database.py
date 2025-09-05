@@ -27,7 +27,7 @@ import threading
 from datetime import datetime
 
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Text, DateTime, ForeignKey, LargeBinary, Index, text
+    create_engine, Column, Integer, String, Text, DateTime, ForeignKey, LargeBinary, Index, text, func
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, scoped_session, joinedload
 
@@ -281,6 +281,46 @@ def get_chunks_by_ids(chunk_ids: list[int]):
             .all()
         )
 
+def get_documents(limit: int = 100, offset: int = 0):
+    """Return a slice of documents ordered by newest first."""
+    with session_scope() as s:
+        return (
+            s.query(Document)
+            .order_by(Document.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+def get_document_chunk_counts(doc_ids: list[int]) -> dict[int, int]:
+    """Return mapping doc_id -> chunk_count for supplied doc_ids."""
+    if not doc_ids:
+        return {}
+    with session_scope() as s:
+        rows = (
+            s.query(Chunk.doc_id.label("doc_id"), func.count(Chunk.chunk_id).label("c"))
+            .filter(Chunk.doc_id.in_(doc_ids))
+            .group_by(Chunk.doc_id)
+            .all()
+        )
+        out: dict[int, int] = {}
+        for row in rows:
+            did = int(getattr(row, "doc_id"))
+            out[did] = int(getattr(row, "c"))
+        return out
+
+def get_all_chunks(limit: int = 200, offset: int = 0):
+    """Return global slice of chunks ordered by chunk_id asc with related document eager loaded."""
+    with session_scope() as s:
+        return (
+            s.query(Chunk)
+            .options(joinedload(Chunk.document))
+            .order_by(Chunk.chunk_id.asc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
 def get_embedding_for_chunk(chunk_id: int):
     with session_scope() as s:
         return s.query(Embedding).filter_by(chunk_id=chunk_id).one_or_none()
@@ -307,6 +347,7 @@ __all__ = [
     "init_db", "get_session", "get_db", "session_scope",
     "add_document", "add_chunk", "upsert_embedding",
     "get_document", "get_document_by_sha", "get_chunks_for_doc", "get_chunks_by_ids",
+    "get_documents", "get_document_chunk_counts", "get_all_chunks",
     "get_embedding_for_chunk", "delete_document", "clear_database",
     "TOK_VER", "SEG_VER", "ping",
     "Document", "Chunk", "Embedding",
