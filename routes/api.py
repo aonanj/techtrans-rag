@@ -79,10 +79,17 @@ def add_doc():
     doc_type = request.form.get("doc_type") or None
     jurisdiction = request.form.get("jurisdiction") or None
 
+    logger.info("Received upload: filename=%s, doc_type=%s, jurisdiction=%s",
+                file.filename, doc_type, jurisdiction)
+
     raw_dir, clean_dir, meta_dir = _upload_dirs()
+    logger.info("Upload directories: raw=%s, clean=%s, meta=%s", raw_dir, clean_dir, meta_dir)
     filename = secure_filename(file.filename)
+    logger.info("Secured filename: %s", filename)
     raw_path = os.path.join(raw_dir, filename)
+    logger.info("Saving uploaded file to %s", raw_path)
     file.save(raw_path)
+    logger.info("File uploaded to %s", raw_path)
 
     # Extract text and title
     try:
