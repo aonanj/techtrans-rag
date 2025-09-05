@@ -30,6 +30,14 @@ from sqlalchemy import (
     create_engine, Column, Integer, String, Text, DateTime, ForeignKey, LargeBinary, Index, text
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, scoped_session, joinedload
+
+try:
+    from infrastructure.logger import get_logger  # reuse central logger if available
+    _logger = get_logger()
+except Exception:  # pragma: no cover - fallback minimal logger
+    import logging as _logging
+    _logging.basicConfig(level=_logging.INFO)
+    _logger = _logging.getLogger("db")
 from flask import g
 from google.cloud.sql.connector import Connector, IPTypes
 
@@ -148,25 +156,24 @@ class Embedding(Base):
 # Public API
 # ---------------------------------------------------------------------------
 def init_db():
-    """Create tables if they do not exist and ensure new columns are present.
+    """Create tables if absent and apply idempotent lightweight migrations.
 
-    Lightweight migration: if doc_type / jurisdiction columns are missing on existing
-    deployments, add them with ALTER TABLE.
+    Ensures new nullable metadata columns (doc_type, jurisdiction) exist. Uses
+    explicit transaction with engine.begin() so DDL is committed (previous
+    implementation used connect() which could leave DDL uncommitted leading to
+    runtime 'column does not exist' errors).
     """
     engine = _ensure_engine()
     Base.metadata.create_all(engine)
-    # Migration for new columns (Postgres specific via information_schema)
+
     try:
-        with engine.connect() as conn:
-            res = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='documents'"))
-            existing = {r[0] for r in res}
-            if "doc_type" not in existing:
-                conn.execute(text("ALTER TABLE documents ADD COLUMN doc_type VARCHAR(128) NULL"))
-            if "jurisdiction" not in existing:
-                conn.execute(text("ALTER TABLE documents ADD COLUMN jurisdiction VARCHAR(64) NULL"))
-    except Exception:
-        # Non-fatal; log suppressed here to avoid logger import. Upstream caller can log if needed.
-        pass
+        with engine.begin() as conn:  # begin() ensures commit
+            # Add columns if they don't exist (Postgres 9.6+ supports IF NOT EXISTS)
+            conn.execute(text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_type VARCHAR(128) NULL"))
+            conn.execute(text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS jurisdiction VARCHAR(64) NULL"))
+        _logger.info("Database migration check complete: doc_type & jurisdiction ensured on documents table")
+    except Exception as e:  # pragma: no cover
+        _logger.warning("Migration check failed (continuing): %s", e)
 
 def get_session():
     _ensure_engine()
