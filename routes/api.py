@@ -109,14 +109,11 @@ def add_doc():
     content_sha = sha256_text(text)
     doc = get_document_by_sha(content_sha)
     if not doc:
-        # Insert new
-        add_document(sha256=content_sha, title=title, source_path=raw_path, doc_type=doc_type, jurisdiction=jurisdiction)
-        doc = get_document_by_sha(content_sha)
+        doc = add_document(sha256=content_sha, title=title, source_path=raw_path, doc_type=doc_type, jurisdiction=jurisdiction)
     else:
-        # Enrich existing if metadata blank
+        # Enrich existing if metadata blank (add_document handles enrichment when doc exists)
         try:
-            add_document(sha256=content_sha, doc_type=doc_type, jurisdiction=jurisdiction)
-            doc = get_document_by_sha(content_sha)
+            doc = add_document(sha256=content_sha, doc_type=doc_type, jurisdiction=jurisdiction)
         except Exception:
             pass
 

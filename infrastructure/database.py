@@ -102,7 +102,13 @@ def _ensure_engine():
         with _LOCK:
             if _ENGINE is None:
                 _ENGINE = _build_engine()
-                _SESSION_FACTORY = scoped_session(sessionmaker(bind=_ENGINE, autoflush=False, autocommit=False))
+                # expire_on_commit=False so returned ORM instances retain attribute values
+                _SESSION_FACTORY = scoped_session(sessionmaker(
+                    bind=_ENGINE,
+                    autoflush=False,
+                    autocommit=False,
+                    expire_on_commit=False,
+                ))
     return _ENGINE
 
 # ---------------------------------------------------------------------------
