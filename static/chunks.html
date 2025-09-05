@@ -17,363 +17,227 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            padding: 20px;
-            color: #fff;
-        }
-        h1 {
-            color: #fff;
-            font-size: 2.5rem;
-            font-weight: 500;
-            text-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
-            text-decoration: underline;
-            margin-bottom: 5px;
-        }
-        h3 {
-            color: #ccc;
-            font-size: 0.85rem;
-            font-weight: 400;
-            font-style: italic;
-            margin: 10px;
-            margin-bottom: 20px;
-        }
-        .local-link {
-            color: #87CEFA;
-            text-decoration: none;
-        }
-        .local-link:hover { 
-            color: powderblue;
-            text-decoration: underline;
-        }
-        #table-container {
-            width: 95%;
-            max-width: 1600px;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background: #333;
-            border-radius: 20px;
-            box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
-            table-layout: fixed;
-        }
-        th, td {
-            border: 1px solid #444;
-            padding: 12px 15px;
-            text-align: left;
-            word-wrap: break-word;
-        }
-        th {
-            background-color: #6495ED;
-            color: white;
-            font-weight: 500;
-        }
-        tr {
-            border-bottom: 1px solid #444;
-        }
-        tr:nth-of-type(even) {
-            background-color: #2c2c2c;
-        }
-        td.editable {
-            cursor: pointer;
-        }
-        td.editable:hover {
-            background-color: #454545;
-        }
-        .editing {
-            background-color: #555 !important;
-        }
-        input, textarea {
-            background: #555;
-            color: #fff;
-            border: 1px solid #666;
-            padding: 5px;
-            width: 100%;
-            font-family: inherit;
-            font-size: inherit;
-        }
-        .buttons, #pagination-controls {
-            margin-top: 20px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 10px;
-        }
-        button {
-            background-color: #87CEFA;
-            color: #001122;
-            border: none;
-            padding: 10px 20px;
-            text-align: center;
-            text-decoration: none;
-            display: inline-block;
-            font-size: 16px;
-            margin: 4px 2px;
-            cursor: pointer;
-            border-radius: 12px;
-            font-weight: 500;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-            transition: background-color 0.3s;
-        }
-        button:hover {
-            background-color: #6caddb;
-        }
-        button:disabled {
-            background-color: #555;
-            cursor: not-allowed;
-        }
-        #cancel-btn {
-            background-color: #ccc;
-        }
-        #cancel-btn:hover {
-            background-color: #b0b0b0;
-        }
-        .text-cell {
-            max-height: 100px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            cursor: pointer;
-        }
-        .text-cell.expanded {
-            max-height: none;
-            overflow: visible;
-        }
-    </style>
-</head>
-<body>
-    <h1>Current Chunked Metadata</h1>
-    <h3>Select a cell to edit the value. Confirm writes changes to chunks.jsonl. Changes are not persisted to the database. Visit <a href="/chunk-status" class="local-link" target="_blank">/db-status</a> to write changes to app.db.</h3>
-    <div id="table-container"></div>
-    <div id="pagination-controls"></div>
-    <div class="buttons">
-        <button id="save-all-btn">Save All Changes</button>
-    </div>
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8" />
+                <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+                <title>Chunks Viewer</title>
+                <style>
+                    *{margin:0;padding:0;box-sizing:border-box}
+                    body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Rounded','SF Pro Display',Roboto,Oxygen,Ubuntu,Cantarell,sans-serif;background:#001122;color:#fff;min-height:100vh;padding:28px;display:flex;flex-direction:column;align-items:center;gap:28px}
+                    .shell{width:100%;max-width:1400px;display:flex;flex-direction:column;gap:26px}
+                    .panel{background:#333;border-radius:20px;padding:26px 32px;box-shadow:0 18px 50px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:20px}
+                    h1{font-size:2.1rem;font-weight:500;text-shadow:0 4px 8px rgba(0,0,0,.5);margin:0}
+                    p.sub{font-size:.8rem;color:#ccc;font-style:italic;line-height:1.5;margin:0}
+                    a{color:#87CEFA;text-decoration:none}a:hover{text-decoration:underline}
+                    form.query{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end}
+                    form.query>div{display:flex;flex-direction:column;gap:6px}
+                    label{font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:#ccc}
+                    input[type=number],input[type=text]{background:#222;border:2px solid #555;border-radius:10px;padding:10px 14px;color:#fff;font-family:inherit;min-width:140px}
+                    input:focus{outline:none;border-color:#7ec8ff;box-shadow:0 0 0 3px rgba(126,200,255,.15)}
+                    button{background:#7ec8ff;color:#001122;border:none;padding:10px 18px;border-radius:10px;font-weight:600;cursor:pointer;font-size:.85rem;letter-spacing:1px;transition:.25s;box-shadow:0 8px 18px rgba(126,200,255,.25)}
+                    button:hover{background:#6bb8ff;transform:translateY(-2px)}
+                    button:active{transform:translateY(0)}
+                    button.secondary{background:rgba(255,102,102,.45);color:#fff;box-shadow:none}
+                    button.secondary:hover{background:rgba(255,102,102,.6)}
+                    .status{font-size:.75rem;color:#ccc;min-height:18px}
+                    .results{display:flex;flex-direction:column;gap:22px}
+                    .summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
+                    .kv{background:#222;border:2px solid #555;border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:4px}
+                    .kv span.k{font-size:.6rem;text-transform:uppercase;letter-spacing:1px;color:#999}
+                    .kv span.v{font-size:.8rem;word-break:break-word}
+                    .chunks{display:flex;flex-direction:column;gap:14px;max-height:60vh;overflow:auto}
+                    .chunk{background:#1b2733;border:1px solid #3d4c55;border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:10px;position:relative}
+                    .chunk h3{margin:0;font-size:.85rem;font-weight:600}
+                    .meta-row{display:flex;flex-wrap:wrap;gap:6px;font-size:.55rem;letter-spacing:.5px}
+                    .tag{background:#2d3f4d;color:#cfe9ff;font-size:.55rem;padding:4px 8px;border-radius:100px;text-transform:uppercase}
+                    .text{font-family:Consolas,Monaco,monospace;font-size:.7rem;line-height:1.35;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:hidden;position:relative}
+                    .text.expanded{max-height:none}
+                    .expand-btn{position:absolute;bottom:0;right:0;background:linear-gradient(90deg,rgba(0,0,0,0),#1b2733 60%);padding:4px 8px;font-size:.55rem;border:none;color:#87CEFA;cursor:pointer}
+                    .expand-btn:hover{text-decoration:underline}
+                    .toolbar{display:flex;flex-wrap:wrap;gap:10px}
+                    .toolbar input{background:#222;border:2px solid #555;border-radius:10px;padding:8px 10px;color:#fff;font-size:.75rem;min-width:220px}
+                    .toolbar input:focus{outline:none;border-color:#7ec8ff;box-shadow:0 0 0 3px rgba(126,200,255,.15)}
+                    .pagination{display:flex;align-items:center;gap:12px;font-size:.7rem;flex-wrap:wrap}
+                    .pagination button{padding:6px 12px;font-size:.65rem}
+                    .empty{text-align:center;font-style:italic;color:#ccc}
+                    .spinner{width:18px;height:18px;border:3px solid rgba(255,255,255,.2);border-top-color:#7ec8ff;border-radius:50%;animation:spin 1s linear infinite}
+                    @keyframes spin{to{transform:rotate(360deg)}}
+                    @media (max-width:900px){.panel{padding:22px 20px}h1{font-size:1.7rem}}
+                </style>
+            </head>
+            <body>
+                <div class="shell">
+                    <div class="panel">
+                        <h1>Chunks Viewer</h1>
+                        <p class="sub">Inspect chunk records stored in the database. Provide a document ID to list its chunks via <code>/api/chunks?doc_id=&lt;id&gt;</code>. Text is truncated; expand individual chunks to view full content.</p>
+                        <form id="queryForm" class="query" autocomplete="off">
+                            <div>
+                                <label for="docId">Document ID</label>
+                                <input type="number" id="docId" min="1" placeholder="e.g., 12" required />
+                            </div>
+                            <div>
+                                <label for="filter">Text Filter (client)</label>
+                                <input type="text" id="filter" placeholder="filter text..." />
+                            </div>
+                            <div>
+                                <label for="pageSize">Page Size</label>
+                                <input type="number" id="pageSize" min="5" max="200" value="25" />
+                            </div>
+                            <div style="display:flex;gap:8px;">
+                                <button type="submit" id="fetchBtn">Fetch</button>
+                                <button type="button" class="secondary" id="clearBtn">Clear</button>
+                            </div>
+                        </form>
+                        <div class="toolbar">
+                            <input type="text" id="sectionFilter" placeholder="filter by section (contains)" />
+                            <input type="text" id="indexFilter" placeholder="filter by chunk index (exact)" />
+                        </div>
+                        <div class="status" id="status"></div>
+                    </div>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            let originalData = [];
-            let currentData = [];
-            const tableContainer = document.getElementById('table-container');
-            const saveAllBtn = document.getElementById('save-all-btn');
-            const paginationControls = document.getElementById('pagination-controls');
-            
-            const ROWS_PER_PAGE = 25;
-            let currentPage = 1;
+                    <div class="panel results" id="resultsPanel" style="display:none;">
+                        <div class="summary" id="summary"></div>
+                        <div class="chunks" id="chunks"></div>
+                        <div class="pagination" id="pagination"></div>
+                    </div>
+                </div>
 
-            const HEADERS = ['id', 'doc_id', 'section_number', 'section_title', 'clause_type', 'path', 'text', 'definition_terms'];
+                <script>
+                    const form = document.getElementById('queryForm');
+                    const docIdInput = document.getElementById('docId');
+                    const filterInput = document.getElementById('filter');
+                    const sectionFilter = document.getElementById('sectionFilter');
+                    const indexFilter = document.getElementById('indexFilter');
+                    const pageSizeInput = document.getElementById('pageSize');
+                    const statusEl = document.getElementById('status');
+                    const summaryEl = document.getElementById('summary');
+                    const chunksEl = document.getElementById('chunks');
+                    const paginationEl = document.getElementById('pagination');
+                    const clearBtn = document.getElementById('clearBtn');
+                    const resultsPanel = document.getElementById('resultsPanel');
 
-            function renderTable() {
-                if (!currentData.length) {
-                    tableContainer.innerHTML = '<p>No chunk data found.</p>';
-                    return;
-                }
+                    let rawChunks = [];
+                    let currentPage = 1;
 
-                const startIndex = (currentPage - 1) * ROWS_PER_PAGE;
-                const endIndex = startIndex + ROWS_PER_PAGE;
-                const paginatedData = currentData.slice(startIndex, endIndex);
+                    function esc(v){return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+                    function setStatus(msg,isErr=false){statusEl.innerHTML = msg?`<span style="${isErr?'color:#ff7b7b;font-weight:600;':''}">${esc(msg)}</span>`:'';}
+                    function spinner(){setStatus(`<span style='display:inline-flex;align-items:center;gap:8px;'><span class="spinner"></span> Loading...</span>`);}
 
-                let tableHtml = '<table><thead><tr>';
-                HEADERS.forEach(header => {
-                    tableHtml += `<th>${header}</th>`;
-                });
-                tableHtml += '<th>Actions</th></tr></thead><tbody>';
-
-                paginatedData.forEach((row, index) => {
-                    const originalIndex = startIndex + index;
-                    tableHtml += `<tr data-row-index="${originalIndex}">`;
-                    HEADERS.forEach(header => {
-                        const value = row[header] || '';
-                        if (header === 'text') {
-                            const truncatedText = value.split(' ').slice(0, 30).join(' ');
-                            const displayText = value.length > truncatedText.length ? truncatedText + '...' : value;
-                            tableHtml += `<td class="editable text-cell" data-key="${header}">${displayText}</td>`;
-                        } else {
-                            tableHtml += `<td class="editable" data-key="${header}">${value}</td>`;
-                        }
-                    });
-                    tableHtml += '<td class="actions-cell"></td>';
-                    tableHtml += '</tr>';
-                });
-
-                tableHtml += '</tbody></table>';
-                tableContainer.innerHTML = tableHtml;
-                attachCellListeners();
-                renderPagination();
-            }
-
-            function renderPagination() {
-                const pageCount = Math.ceil(currentData.length / ROWS_PER_PAGE);
-                paginationControls.innerHTML = '';
-
-                const prevButton = document.createElement('button');
-                prevButton.innerText = 'Previous';
-                prevButton.disabled = currentPage === 1;
-                prevButton.addEventListener('click', () => {
-                    currentPage--;
-                    renderTable();
-                });
-                paginationControls.appendChild(prevButton);
-
-                const pageInfo = document.createElement('span');
-                pageInfo.innerText = `Page ${currentPage} of ${pageCount}`;
-                paginationControls.appendChild(pageInfo);
-
-                const nextButton = document.createElement('button');
-                nextButton.innerText = 'Next';
-                nextButton.disabled = currentPage === pageCount;
-                nextButton.addEventListener('click', () => {
-                    currentPage++;
-                    renderTable();
-                });
-                paginationControls.appendChild(nextButton);
-            }
-
-            function attachCellListeners() {
-                const cells = document.querySelectorAll('.editable');
-                cells.forEach(cell => {
-                    cell.addEventListener('click', function(e) {
-                        const td = e.target.closest('td');
-                        if (!td || td.querySelector('input, textarea')) return;
-
-                        const tr = td.closest('tr');
-                        const rowIndex = tr.dataset.rowIndex;
-                        
-                        // Don't do anything if another row is being edited
-                        if (document.querySelector('.editing-row') && !tr.classList.contains('editing-row')) {
-                            alert("Please save or cancel the current edit before editing another row.");
-                            return;
-                        }
-
-                        // Handle text expansion
-                        if (td.classList.contains('text-cell') && !td.classList.contains('editing')) {
-                            const isExpanded = td.classList.toggle('expanded');
-                            const fullText = currentData[rowIndex].text;
-                            if (isExpanded) {
-                                td.innerText = fullText;
-                            } else {
-                                const truncatedText = fullText.split(' ').slice(0, 30).join(' ');
-                                td.innerText = fullText.length > truncatedText.length ? truncatedText + '...' : fullText;
-                            }
-                            return;
-                        }
-
-                        // Enter edit mode
-                        tr.classList.add('editing-row');
-                        td.classList.add('editing');
-
-                        const key = td.dataset.key;
-                        const originalValue = currentData[rowIndex][key];
-                        
-                        const input = document.createElement(key === 'text' ? 'textarea' : 'input');
-                        input.value = originalValue;
-                        if (input.tagName === 'TEXTAREA') input.style.height = '200px';
-                        
-                        td.innerHTML = '';
-                        td.appendChild(input);
-                        input.focus();
-
-                        showActionButtons(tr, rowIndex);
-                    });
-                });
-            }
-
-            function showActionButtons(tr, rowIndex) {
-                const actionsCell = tr.querySelector('.actions-cell');
-                actionsCell.innerHTML = ''; // Clear previous buttons
-
-                const saveBtn = document.createElement('button');
-                saveBtn.innerText = 'Save';
-                saveBtn.onclick = () => saveRow(rowIndex);
-
-                const cancelBtn = document.createElement('button');
-                cancelBtn.innerText = 'Cancel';
-                cancelBtn.id = 'cancel-btn';
-                cancelBtn.onclick = () => cancelEdit(rowIndex);
-
-                actionsCell.appendChild(saveBtn);
-                actionsCell.appendChild(cancelBtn);
-            }
-
-            function saveRow(rowIndex) {
-                const tr = document.querySelector(`tr[data-row-index="${rowIndex}"]`);
-                const editingCell = tr.querySelector('td.editing');
-                if (!editingCell) return;
-
-                const input = editingCell.querySelector('input, textarea');
-                const key = editingCell.dataset.key;
-                currentData[rowIndex][key] = input.value;
-
-                // Update original data to reflect the save
-                originalData[rowIndex][key] = input.value;
-
-                exitEditMode(rowIndex);
-            }
-
-            function cancelEdit(rowIndex) {
-                // No changes to currentData, just revert UI
-                exitEditMode(rowIndex);
-            }
-
-            function exitEditMode(rowIndex) {
-                const tr = document.querySelector(`tr[data-row-index="${rowIndex}"]`);
-                if (tr) {
-                    tr.classList.remove('editing-row');
-                    const editingCell = tr.querySelector('td.editing');
-                    if (editingCell) {
-                        editingCell.classList.remove('editing');
-                        const key = editingCell.dataset.key;
-                        const value = currentData[rowIndex][key];
-                        if (key === 'text') {
-                            const truncatedText = value.split(' ').slice(0, 30).join(' ');
-                            editingCell.innerText = value.length > truncatedText.length ? truncatedText + '...' : value;
-                            editingCell.classList.remove('expanded');
-                        } else {
-                            editingCell.innerText = value;
-                        }
+                    function fetchChunks(docId){
+                        spinner();
+                        fetch(`/api/chunks?doc_id=${encodeURIComponent(docId)}`)
+                            .then(r=>r.json())
+                            .then(data=>{
+                                if(data.error){ setStatus(data.error,true); resultsPanel.style.display='none'; return; }
+                                rawChunks = Array.isArray(data.chunks)?data.chunks:[];
+                                setStatus(rawChunks.length?`Loaded ${rawChunks.length} chunk(s).`:'No chunks.');
+                                buildSummary(data);
+                                currentPage=1;
+                                render();
+                                resultsPanel.style.display='block';
+                            })
+                            .catch(err=>{ setStatus('Failed to load chunks: '+err.message,true); resultsPanel.style.display='none'; });
                     }
-                    const actionsCell = tr.querySelector('.actions-cell');
-                    if (actionsCell) actionsCell.innerHTML = '';
-                }
-            }
 
-            function fetchData() {
-                fetch('/api/chunks')
-                    .then(response => response.json())
-                    .then(data => {
-                        originalData = JSON.parse(JSON.stringify(data));
-                        currentData = JSON.parse(JSON.stringify(data));
-                        renderTable();
-                    })
-                    .catch(error => {
-                        console.error('Error fetching chunks data:', error);
-                        tableContainer.innerHTML = '<p>Error loading data.</p>';
-                    });
-            }
-
-            saveAllBtn.addEventListener('click', function() {
-                fetch('/api/chunks', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(currentData),
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.message) {
-                        alert('Chunks updated successfully!');
-                        originalData = JSON.parse(JSON.stringify(currentData));
-                    } else {
-                        alert('Error updating chunks: ' + (data.error || 'Unknown error'));
+                    function buildSummary(apiData){
+                        summaryEl.innerHTML='';
+                        if(!rawChunks.length) return;
+                        const last = rawChunks[rawChunks.length-1];
+                        const meta = {
+                            doc_id: apiData.doc_id,
+                            total_chunks: rawChunks.length,
+                            first_chunk_id: rawChunks[0]?.chunk_id,
+                            last_chunk_id: last?.chunk_id,
+                            token_version: last?.tok_ver,
+                            segment_version: last?.seg_ver
+                        };
+                        Object.entries(meta).forEach(([k,v])=>{
+                            summaryEl.insertAdjacentHTML('beforeend', `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`);
+                        });
                     }
-                })
-                .catch(error => {
-                    console.error('Error updating chunks:', error);
-                    alert('Error updating chunks.');
-                });
-            });
 
-            fetchData();
-        });
-    </script>
-</body>
-</html>
+                    function applyFilters(list){
+                        const t = filterInput.value.trim().toLowerCase();
+                        const s = sectionFilter.value.trim().toLowerCase();
+                        const idx = indexFilter.value.trim();
+                        return list.filter(c=>{
+                            if(t && !JSON.stringify(c).toLowerCase().includes(t)) return false;
+                            if(s && !(c.section||'').toLowerCase().includes(s)) return false;
+                            if(idx && String(c.chunk_index) !== idx) return false;
+                            return true;
+                        });
+                    }
+
+                    function paginate(list,page,pageSize){
+                        const start=(page-1)*pageSize; return list.slice(start,start+pageSize);
+                    }
+
+                    function render(){
+                        const filtered = applyFilters(rawChunks);
+                        const pageSize = Math.max(5, Math.min(200, parseInt(pageSizeInput.value,10)||25));
+                        const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+                        if(currentPage>pageCount) currentPage=pageCount;
+                        const pageItems = paginate(filtered,currentPage,pageSize);
+
+                        if(!filtered.length){ chunksEl.innerHTML='<div class="empty">No chunks match filters.</div>'; paginationEl.innerHTML=''; return; }
+
+                        chunksEl.innerHTML = pageItems.map(ch => renderChunk(ch)).join('');
+                        buildPagination(pageCount);
+                        attachExpandHandlers();
+                    }
+
+                    function renderChunk(ch){
+                        const truncated = (ch.text||'').length>800 ? (ch.text.slice(0,800)+'…') : ch.text;
+                        const needsExpand = truncated !== ch.text;
+                        const metaTags = [];
+                        metaTags.push(`<span class='tag'>Idx ${esc(ch.chunk_index)}</span>`);
+                        if(ch.token_count!=null) metaTags.push(`<span class='tag'>Tok ${esc(ch.token_count)}</span>`);
+                        if(ch.section) metaTags.push(`<span class='tag'>Sec</span>`);
+                        return `<div class='chunk' data-chunk='${esc(ch.chunk_id)}'>
+                            <h3>Chunk ${esc(ch.chunk_id)}</h3>
+                            <div class='meta-row'>${metaTags.join('')}</div>
+                            <div class='text${needsExpand?'':' expanded'}' data-full='${esc(ch.text||'')}' data-trunc='${esc(truncated)}'>${esc(truncated)}</div>
+                            ${needsExpand?'<button class="expand-btn" type="button">Expand</button>':''}
+                        </div>`;
+                    }
+
+                    function attachExpandHandlers(){
+                        chunksEl.querySelectorAll('.expand-btn').forEach(btn=>{
+                            btn.addEventListener('click',()=>{
+                                const wrapper = btn.closest('.chunk');
+                                const textDiv = wrapper.querySelector('.text');
+                                if(!textDiv) return;
+                                if(textDiv.classList.contains('expanded')){
+                                    textDiv.classList.remove('expanded');
+                                    textDiv.textContent = textDiv.getAttribute('data-trunc');
+                                    btn.textContent='Expand';
+                                } else {
+                                    textDiv.classList.add('expanded');
+                                    textDiv.textContent = textDiv.getAttribute('data-full');
+                                    btn.textContent='Collapse';
+                                }
+                            });
+                        });
+                    }
+
+                    function buildPagination(pageCount){
+                        paginationEl.innerHTML='';
+                        if(pageCount<=1) return;
+                        const makeBtn=(label,disabled,on)=>{const b=document.createElement('button');b.textContent=label;b.disabled=disabled;b.addEventListener('click',on);return b;};
+                        paginationEl.appendChild(makeBtn('Prev',currentPage===1,()=>{currentPage--;render();}));
+                        paginationEl.insertAdjacentHTML('beforeend', `<span>Page ${currentPage} / ${pageCount}</span>`);
+                        paginationEl.appendChild(makeBtn('Next',currentPage===pageCount,()=>{currentPage++;render();}));
+                    }
+
+                    form.addEventListener('submit',e=>{e.preventDefault(); const id=docIdInput.value.trim(); if(!id){setStatus('Document ID required',true);return;} fetchChunks(id);});
+                    clearBtn.addEventListener('click',()=>{docIdInput.value='';filterInput.value='';sectionFilter.value='';indexFilter.value='';rawChunks=[];resultsPanel.style.display='none';setStatus('');});
+                    [filterInput, sectionFilter, indexFilter, pageSizeInput].forEach(inp=>inp.addEventListener('input',()=>{currentPage=1;render();}));
+
+                    // Auto-load if doc_id in query params
+                    const params = new URLSearchParams(window.location.search); const qsId = params.get('doc_id'); if(qsId){ docIdInput.value=qsId; fetchChunks(qsId); }
+                </script>
+            </body>
+            </html>
+                            return;
