@@ -1,239 +1,194 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manifest</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <title>Document Manifest Viewer</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin:0; padding:0; box-sizing:border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Rounded', 'SF Pro Display', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: #001122;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-            color: #fff;
+            font-family:-apple-system,BlinkMacSystemFont,'SF Pro Rounded','SF Pro Display',Roboto,Oxygen,Ubuntu,Cantarell,sans-serif;
+            background:#001122; color:#fff; min-height:100vh; padding:28px; display:flex; flex-direction:column; gap:28px; align-items:center;
         }
-        h1 {
-            color: #fff;
-            font-size: 2.5rem;
-            font-weight: 500;
-            text-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
-            text-decoration: underline;
-            margin-bottom: 5px;
-        }
-        h3 {
-            color: #ccc;
-            font-size: 0.85rem;
-            font-weight: 400;
-            font-style: italic;
-            margin: 10px;
-            margin-bottom: 20px;
-        }
-        .local-link {
-            color: #87CEFA;
-            text-decoration: none;
-        }
-        .local-link:hover { 
-            color: powderblue;
-            text-decoration: underline;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background: #333;
-            border-radius: 20px;
-            box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
-        }
-        th, td {
-            border: 1px solid #444;
-            padding: 12px 15px;
-            text-align: left;
-        }
-        th {
-            background-color: #6495ED;
-            color: white;
-            font-weight: 500;
-        }
-        tr {
-            border-bottom: 1px solid #444;
-        }
-        tr:nth-of-type(even) {
-            background-color: #2c2c2c;
-        }
-        td.editable {
-            cursor: pointer;
-        }
-        td.editable:hover {
-            background-color: #454545;
-        }
-        .editing {
-            background-color: #555 !important;
-        }
-        input {
-            background: #555;
-            color: #fff;
-            border: 1px solid #666;
-            padding: 5px;
-            width: 100%;
-        }
-        .buttons {
-            margin-top: 20px;
-        }
-        button {
-            background-color: #87CEFA;
-            color: #001122;
-            border: none;
-            padding: 10px 20px;
-            text-align: center;
-            text-decoration: none;
-            display: inline-block;
-            font-size: 16px;
-            margin: 4px 2px;
-            cursor: pointer;
-            border-radius: 12px;
-            font-weight: 500;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-            transition: background-color 0.3s;
-        }
-        button:hover {
-            background-color: #6caddb;
-        }
-        #cancel-btn {
-            background-color: #ccc;
-        }
-        #cancel-btn:hover {
-            background-color: #b0b0b0;
-        }
+        .shell { width:100%; max-width:1200px; display:flex; flex-direction:column; gap:26px; }
+        .panel { background:#333; border-radius:20px; padding:28px 32px; box-shadow:0 18px 50px rgba(0,0,0,.5); }
+        h1 { font-size:2.2rem; font-weight:500; text-shadow:0 4px 8px rgba(0,0,0,.5); margin:0 0 8px; }
+        p.sub { font-size:.8rem; color:#ccc; font-style:italic; line-height:1.5; }
+        a { color:#87CEFA; text-decoration:none; }
+        a:hover { text-decoration:underline; }
+        form.query { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; }
+        form.query > div { display:flex; flex-direction:column; gap:6px; }
+        label { font-size:.7rem; text-transform:uppercase; letter-spacing:1px; color:#ccc; }
+        input[type="number"], input[type="text"] { background:#222; border:2px solid #555; border-radius:10px; padding:10px 14px; color:#fff; font-family:inherit; min-width:140px; }
+        input:focus { outline:none; border-color:#7ec8ff; box-shadow:0 0 0 3px rgba(126,200,255,0.15); }
+        button { background:#7ec8ff; color:#001122; border:none; padding:12px 22px; border-radius:10px; font-weight:600; cursor:pointer; font-size:.9rem; letter-spacing:1px; transition:.25s; box-shadow:0 8px 18px rgba(126,200,255,0.25); }
+        button:hover { background:#6bb8ff; transform:translateY(-2px); }
+        button:active { transform:translateY(0); }
+        button.secondary { background:rgba(255,102,102,.45); color:#fff; box-shadow:none; }
+        button.secondary:hover { background:rgba(255,102,102,.6); }
+        .status { font-size:.75rem; color:#ccc; margin-top:6px; min-height:18px; }
+        .results { display:flex; flex-direction:column; gap:22px; }
+        .meta-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; }
+        .kv { background:#222; border:2px solid #555; border-radius:12px; padding:12px 14px; display:flex; flex-direction:column; gap:4px; }
+        .kv span.k { font-size:.65rem; text-transform:uppercase; letter-spacing:1px; color:#999; }
+        .kv span.v { font-size:.85rem; word-break:break-word; }
+        .records { background:#222; border:2px solid #555; border-radius:16px; padding:20px; display:flex; flex-direction:column; gap:20px; max-height:50vh; overflow:auto; }
+        .record { background:#1b2733; border:1px solid #3d4c55; border-radius:12px; padding:16px 18px; display:flex; flex-direction:column; gap:10px; position:relative; }
+        .record h3 { margin:0; font-size:.95rem; font-weight:600; }
+        .badge-row { display:flex; flex-wrap:wrap; gap:6px; }
+        .badge { background:#2d3f4d; color:#cfe9ff; font-size:.6rem; padding:4px 8px; border-radius:100px; letter-spacing:.5px; text-transform:uppercase; }
+        .json-view { font-family:Consolas,Monaco,monospace; font-size:.7rem; background:#111a22; border:1px solid #2c3a44; border-radius:8px; padding:10px 12px; white-space:pre; overflow:auto; max-height:240px; }
+        .empty { text-align:center; font-style:italic; color:#ccc; }
+        .error { color:#ff7b7b; font-weight:600; }
+        .spinner { width:18px; height:18px; border:3px solid rgba(255,255,255,.2); border-top-color:#7ec8ff; border-radius:50%; animation:spin 1s linear infinite; }
+        .inline { display:inline-flex; align-items:center; gap:10px; }
+        @keyframes spin { to { transform:rotate(360deg);} }
+        .toolbar { display:flex; gap:10px; flex-wrap:wrap; }
+        .filter-box { background:#222; border:2px solid #555; border-radius:10px; padding:8px 12px; display:flex; gap:10px; }
+        .filter-box input { border:none; background:transparent; padding:0; font-size:.75rem; min-width:160px; }
+        .filter-box input:focus { outline:none; }
+        .copy-btn { position:absolute; top:10px; right:10px; font-size:.55rem; padding:4px 8px; background:#2d3f4d; color:#fff; border:none; border-radius:6px; cursor:pointer; }
+        .copy-btn:hover { background:#3d5566; }
+        @media (max-width:800px){ .panel { padding:22px 20px; } h1 { font-size:1.7rem; } }
     </style>
 </head>
 <body>
-    <h1>Current Manifest Metadata</h1>
-    <h3>Select a cell to edit the value. Confirm writes changes to manifest.jsonl. Changes are not persisted to the database. Visit <a href="/db-status" class="local-link" target="_blank">/db-status</a> to write changes to app.db.</h3>
-    <div id="manifest-table"></div>
-    <div class="buttons">
-        <button id="confirm-btn">Confirm</button>
-        <button id="cancel-btn">Cancel</button>
+    <div class="shell">
+        <div class="panel">
+            <h1>Manifest Viewer</h1>
+            <p class="sub">Inspect stored manifest metadata written during upload. Provide a document ID to fetch <code>manifest.jsonl</code> records. Source: local filesystem (.data/uploads/metadata/&lt;doc_id&gt;/manifest.jsonl). For database schema view visit <a href="/db-status" target="_blank">/db-status</a>.</p>
+            <form id="queryForm" class="query" autocomplete="off">
+                <div>
+                    <label for="docId">Document ID</label>
+                    <input type="number" id="docId" name="docId" min="1" required placeholder="e.g., 12" />
+                </div>
+                <div>
+                    <label for="filter">Text Filter (client)</label>
+                    <input type="text" id="filter" placeholder="Type to filter records" />
+                </div>
+                <div style="display:flex; gap:8px;">
+                    <button type="submit" id="fetchBtn">Fetch</button>
+                    <button type="button" class="secondary" id="clearBtn">Clear</button>
+                </div>
+            </form>
+            <div class="status" id="status"></div>
+        </div>
+
+        <div class="panel results" id="resultsPanel" style="display:none;">
+            <div class="meta-grid" id="metaGrid"></div>
+            <div class="records" id="records"></div>
+        </div>
     </div>
 
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            let originalData = [];
-            let currentData = [];
-            const tableContainer = document.getElementById('manifest-table');
-            const confirmBtn = document.getElementById('confirm-btn');
-            const cancelBtn = document.getElementById('cancel-btn');
+        const qForm = document.getElementById('queryForm');
+        const docIdInput = document.getElementById('docId');
+        const filterInput = document.getElementById('filter');
+        const statusEl = document.getElementById('status');
+        const metaGrid = document.getElementById('metaGrid');
+        const recordsEl = document.getElementById('records');
+        const resultsPanel = document.getElementById('resultsPanel');
+        const clearBtn = document.getElementById('clearBtn');
+        const fetchBtn = document.getElementById('fetchBtn');
+        let rawRecords = []; // full list
 
-            function renderTable() {
-                if (!currentData.length) {
-                    tableContainer.innerHTML = '<p>No manifest data found.</p>';
-                    return;
-                }
+        function esc(v){
+            return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
 
-                const headers = Object.keys(currentData[0]).filter(header => header !== 'hash_sha256');
-                let tableHtml = '<table><thead><tr>';
-                headers.forEach(header => {
-                    tableHtml += `<th>${header}</th>`;
-                });
-                tableHtml += '</tr></thead><tbody>';
+        function setStatus(msg, isError=false){
+            statusEl.innerHTML = msg ? `<span class="${isError?'error':''}">${esc(msg)}</span>` : '';
+        }
 
-                currentData.forEach((row, rowIndex) => {
-                    tableHtml += '<tr>';
-                    headers.forEach(header => {
-                        tableHtml += `<td class="editable" data-row="${rowIndex}" data-key="${header}">${row[header]}</td>`;
-                    });
-                    tableHtml += '</tr>';
-                });
+        function spinner(){
+            setStatus(`<span class='inline'><span class='spinner'></span> Loading...</span>`);
+        }
 
-                tableHtml += '</tbody></table>';
-                tableContainer.innerHTML = tableHtml;
-                attachCellListeners();
+        function buildMetaCard(k, v){
+            return `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
+        }
+
+        function populateMeta(docId, arr){
+            metaGrid.innerHTML = '';
+            if (!arr.length){ return; }
+            // Use the most recent record (last line) for top-level summary
+            const last = arr[arr.length-1];
+            const keys = ["doc_id","title","sha256","bytes","content_type","created_at","doc_type","jurisdiction"];
+            keys.forEach(k=>{ if(k in last) metaGrid.insertAdjacentHTML('beforeend', buildMetaCard(k,last[k])); });
+        }
+
+        function renderRecords(){
+            const term = filterInput.value.trim().toLowerCase();
+            const list = term ? rawRecords.filter(r => JSON.stringify(r).toLowerCase().includes(term)) : rawRecords;
+            if(!list.length){
+                recordsEl.innerHTML = '<div class="empty">No manifest entries match.</div>';
+                return;
             }
+            recordsEl.innerHTML = list.map((rec, idx) => {
+                const label = rec.title || `Record ${idx+1}`;
+                const badges = [];
+                if(rec.doc_type) badges.push(`<span class='badge'>${esc(rec.doc_type)}</span>`);
+                if(rec.jurisdiction) badges.push(`<span class='badge'>${esc(rec.jurisdiction)}</span>`);
+                return `<div class='record'>
+                    <button class='copy-btn' data-copy='${esc(rec.sha256 || '')}' ${rec.sha256?"":"disabled"}>Copy SHA</button>
+                    <h3>${esc(label)}</h3>
+                    <div class='badge-row'>${badges.join('')}</div>
+                    <div class='json-view'>${esc(JSON.stringify(rec,null,2))}</div>
+                </div>`;
+            }).join('');
+            attachCopyHandlers();
+        }
 
-            function attachCellListeners() {
-                const cells = document.querySelectorAll('.editable');
-                cells.forEach(cell => {
-                    cell.addEventListener('click', function() {
-                        if (this.querySelector('input')) return;
-                        const originalValue = this.innerText;
-                        const input = document.createElement('input');
-                        input.type = 'text';
-                        input.value = originalValue;
-                        this.innerHTML = '';
-                        this.appendChild(input);
-                        input.focus();
-                        this.classList.add('editing');
-
-                        input.addEventListener('blur', function() {
-                            const newValue = this.value;
-                            const cell = this.parentElement;
-                            const rowIndex = cell.dataset.row;
-                            const key = cell.dataset.key;
-                            currentData[rowIndex][key] = newValue;
-                            cell.innerText = newValue;
-                            cell.classList.remove('editing');
-                        });
-
-                        input.addEventListener('keydown', function(e) {
-                            if (e.key === 'Enter') {
-                                this.blur();
-                            }
-                        });
+        function attachCopyHandlers(){
+            recordsEl.querySelectorAll('.copy-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const val = btn.getAttribute('data-copy');
+                    if(!val) return;
+                    navigator.clipboard.writeText(val).then(()=>{
+                        btn.textContent = 'Copied';
+                        setTimeout(()=> btn.textContent = 'Copy SHA', 1500);
                     });
                 });
-            }
+            });
+        }
 
-            function fetchData() {
-                fetch('/api/manifest')
-                    .then(response => response.json())
-                    .then(data => {
-                        originalData = JSON.parse(JSON.stringify(data));
-                        currentData = JSON.parse(JSON.stringify(data));
-                        renderTable();
-                    })
-                    .catch(error => {
-                        console.error('Error fetching manifest data:', error);
-                        tableContainer.innerHTML = '<p>Error loading data.</p>';
-                    });
-            }
-
-            confirmBtn.addEventListener('click', function() {
-                fetch('/api/manifest', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(currentData),
-                })
-                .then(response => response.json())
+        function fetchManifest(docId){
+            spinner();
+            fetch(`/api/manifest?doc_id=${encodeURIComponent(docId)}`)
+                .then(r => r.json())
                 .then(data => {
-                    if (data.message) {
-                        alert('Manifest updated successfully!');
-                        originalData = JSON.parse(JSON.stringify(currentData));
-                    } else {
-                        alert('Error updating manifest: ' + (data.error || 'Unknown error'));
-                    }
+                    if(data.error){ setStatus(data.error, true); resultsPanel.style.display='none'; return; }
+                    rawRecords = Array.isArray(data.manifest) ? data.manifest : [];
+                    setStatus(rawRecords.length ? `Loaded ${rawRecords.length} record(s).` : 'No manifest entries.');
+                    populateMeta(docId, rawRecords);
+                    renderRecords();
+                    resultsPanel.style.display='block';
                 })
-                .catch(error => {
-                    console.error('Error updating manifest:', error);
-                    alert('Error updating manifest.');
+                .catch(err => {
+                    setStatus('Failed to load manifest: '+ err.message, true);
+                    resultsPanel.style.display='none';
                 });
-            });
+        }
 
-            cancelBtn.addEventListener('click', function() {
-                currentData = JSON.parse(JSON.stringify(originalData));
-                renderTable();
-            });
+        filterInput.addEventListener('input', () => renderRecords());
 
-            fetchData();
+        qForm.addEventListener('submit', e => {
+            e.preventDefault();
+            const id = docIdInput.value.trim();
+            if(!id){ setStatus('Document ID required', true); return; }
+            fetchManifest(id);
         });
+
+        clearBtn.addEventListener('click', () => {
+            docIdInput.value='';
+            filterInput.value='';
+            rawRecords=[]; metaGrid.innerHTML=''; recordsEl.innerHTML=''; resultsPanel.style.display='none'; setStatus('');
+        });
+
+        // Auto-load if doc_id present in query string
+        const params = new URLSearchParams(window.location.search);
+        const qsId = params.get('doc_id');
+        if(qsId){ docIdInput.value = qsId; fetchManifest(qsId); }
     </script>
 </body>
 </html>
