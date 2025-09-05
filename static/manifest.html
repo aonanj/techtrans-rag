@@ -27,12 +27,22 @@
         button.secondary { background:rgba(255,102,102,.45); color:#fff; box-shadow:none; }
         button.secondary:hover { background:rgba(255,102,102,.6); }
         .status { font-size:.75rem; color:#ccc; margin-top:6px; min-height:18px; }
-        .results { display:flex; flex-direction:column; gap:22px; }
+    .results { display:flex; flex-direction:column; gap:22px; }
+    .view-toggles { display:flex; gap:10px; flex-wrap:wrap; }
+    .view-toggles button { background:#2d3f4d; color:#cfe9ff; box-shadow:none; padding:8px 14px; font-size:.7rem; }
+    .view-toggles button.active { background:#7ec8ff; color:#001122; }
         .meta-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; }
         .kv { background:#222; border:2px solid #555; border-radius:12px; padding:12px 14px; display:flex; flex-direction:column; gap:4px; }
         .kv span.k { font-size:.65rem; text-transform:uppercase; letter-spacing:1px; color:#999; }
         .kv span.v { font-size:.85rem; word-break:break-word; }
-        .records { background:#222; border:2px solid #555; border-radius:16px; padding:20px; display:flex; flex-direction:column; gap:20px; max-height:50vh; overflow:auto; }
+    .records { background:#222; border:2px solid #555; border-radius:16px; padding:20px; display:flex; flex-direction:column; gap:20px; max-height:50vh; overflow:auto; }
+    .table-wrapper { background:#222; border:2px solid #555; border-radius:16px; padding:14px 18px; max-height:55vh; overflow:auto; }
+    table.data-table { width:100%; border-collapse:collapse; font-size:.7rem; }
+    table.data-table th, table.data-table td { padding:6px 8px; text-align:left; border:1px solid #444; vertical-align:top; }
+    table.data-table th { position:sticky; top:0; background:#2d3f4d; z-index:2; font-weight:600; letter-spacing:.5px; }
+    table.data-table tbody tr:nth-child(even){ background:#1e2a33; }
+    .truncate { max-width:300px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .row-expand { cursor:pointer; color:#87CEFA; font-size:.6rem; }
         .record { background:#1b2733; border:1px solid #3d4c55; border-radius:12px; padding:16px 18px; display:flex; flex-direction:column; gap:10px; position:relative; }
         .record h3 { margin:0; font-size:.95rem; font-weight:600; }
         .badge-row { display:flex; flex-wrap:wrap; gap:6px; }
@@ -75,8 +85,13 @@
         </div>
 
         <div class="panel results" id="resultsPanel" style="display:none;">
+            <div class="view-toggles">
+                <button type="button" id="cardsMode" class="active">Records</button>
+                <button type="button" id="tableMode">Table</button>
+            </div>
             <div class="meta-grid" id="metaGrid"></div>
-            <div class="records" id="records"></div>
+            <div class="records" id="records" style="display:block;"></div>
+            <div class="table-wrapper" id="tableWrapper" style="display:none;"></div>
         </div>
     </div>
 
@@ -86,7 +101,10 @@
         const filterInput = document.getElementById('filter');
         const statusEl = document.getElementById('status');
         const metaGrid = document.getElementById('metaGrid');
-        const recordsEl = document.getElementById('records');
+    const recordsEl = document.getElementById('records');
+    const tableWrapper = document.getElementById('tableWrapper');
+    const cardsModeBtn = document.getElementById('cardsMode');
+    const tableModeBtn = document.getElementById('tableMode');
         const resultsPanel = document.getElementById('resultsPanel');
         const clearBtn = document.getElementById('clearBtn');
         const fetchBtn = document.getElementById('fetchBtn');
@@ -117,26 +135,46 @@
             keys.forEach(k=>{ if(k in last) metaGrid.insertAdjacentHTML('beforeend', buildMetaCard(k,last[k])); });
         }
 
-        function renderRecords(){
+        function filteredRecords(){
             const term = filterInput.value.trim().toLowerCase();
-            const list = term ? rawRecords.filter(r => JSON.stringify(r).toLowerCase().includes(term)) : rawRecords;
-            if(!list.length){
-                recordsEl.innerHTML = '<div class="empty">No manifest entries match.</div>';
-                return;
+            return term ? rawRecords.filter(r => JSON.stringify(r).toLowerCase().includes(term)) : rawRecords;
+        }
+
+        function renderRecords(){
+            const list = filteredRecords();
+            if(cardsModeBtn.classList.contains('active')){
+                if(!list.length){ recordsEl.innerHTML = '<div class="empty">No manifest entries match.</div>'; return; }
+                recordsEl.innerHTML = list.map((rec, idx) => {
+                    const label = rec.title || `Record ${idx+1}`;
+                    const badges = [];
+                    if(rec.doc_type) badges.push(`<span class='badge'>${esc(rec.doc_type)}</span>`);
+                    if(rec.jurisdiction) badges.push(`<span class='badge'>${esc(rec.jurisdiction)}</span>`);
+                    return `<div class='record'>
+                        <button class='copy-btn' data-copy='${esc(rec.sha256 || '')}' ${rec.sha256?"":"disabled"}>Copy SHA</button>
+                        <h3>${esc(label)}</h3>
+                        <div class='badge-row'>${badges.join('')}</div>
+                        <div class='json-view'>${esc(JSON.stringify(rec,null,2))}</div>
+                    </div>`;
+                }).join('');
+                attachCopyHandlers();
+            } else {
+                renderTable(list);
             }
-            recordsEl.innerHTML = list.map((rec, idx) => {
-                const label = rec.title || `Record ${idx+1}`;
-                const badges = [];
-                if(rec.doc_type) badges.push(`<span class='badge'>${esc(rec.doc_type)}</span>`);
-                if(rec.jurisdiction) badges.push(`<span class='badge'>${esc(rec.jurisdiction)}</span>`);
-                return `<div class='record'>
-                    <button class='copy-btn' data-copy='${esc(rec.sha256 || '')}' ${rec.sha256?"":"disabled"}>Copy SHA</button>
-                    <h3>${esc(label)}</h3>
-                    <div class='badge-row'>${badges.join('')}</div>
-                    <div class='json-view'>${esc(JSON.stringify(rec,null,2))}</div>
-                </div>`;
-            }).join('');
-            attachCopyHandlers();
+        }
+
+        function renderTable(list){
+            if(!list.length){ tableWrapper.innerHTML = '<div class="empty">No manifest entries match.</div>'; return; }
+            const columns = ["doc_id","title","doc_type","jurisdiction","bytes","content_type","sha256","created_at"];
+            let html = '<table class="data-table"><thead><tr>' + columns.map(c=>`<th>${esc(c)}</th>`).join('') + '</tr></thead><tbody>';
+            html += list.map(r => '<tr>'+ columns.map(c => {
+                let val = r[c];
+                if(val == null) val='';
+                let display = String(val);
+                if(display.length>140) display = display.slice(0,140)+'…';
+                return `<td class="${display!==String(val)?'truncate':''}" title="${esc(String(val))}">${esc(display)}</td>`;
+            }).join('') + '</tr>').join('');
+            html += '</tbody></table>';
+            tableWrapper.innerHTML = html;
         }
 
         function attachCopyHandlers(){
@@ -170,7 +208,9 @@
                 });
         }
 
-        filterInput.addEventListener('input', () => renderRecords());
+    filterInput.addEventListener('input', () => renderRecords());
+    cardsModeBtn.addEventListener('click', () => { if(cardsModeBtn.classList.contains('active')) return; cardsModeBtn.classList.add('active'); tableModeBtn.classList.remove('active'); recordsEl.style.display='block'; tableWrapper.style.display='none'; renderRecords(); });
+    tableModeBtn.addEventListener('click', () => { if(tableModeBtn.classList.contains('active')) return; tableModeBtn.classList.add('active'); cardsModeBtn.classList.remove('active'); recordsEl.style.display='none'; tableWrapper.style.display='block'; renderRecords(); });
 
         qForm.addEventListener('submit', e => {
             e.preventDefault();
