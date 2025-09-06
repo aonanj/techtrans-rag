@@ -1,15 +1,14 @@
 # api.py (Cloud Run + PostgreSQL refactor)
 import os
 import json
-from datetime import datetime, timezone
-
+from google.cloud import storage
+from google.api_core.exceptions import NotFound
+import filetype
+from typing import Any, Dict
 from flask import Blueprint, request, jsonify
 from werkzeug.utils import secure_filename
-
 from infrastructure.logger import get_logger
 
-# Swap old infrastructure.database for the local database.py refactor
-# Provides SQLAlchemy sessions and helpers for Cloud SQL Postgres
 from infrastructure.database import (
     init_db,
     add_document,
@@ -21,46 +20,58 @@ from infrastructure.database import (
     get_all_chunks,
 )
 from infrastructure.embeddings import generate_and_store_embeddings, find_nearest_neighbors_advanced
-# Keep existing processing utilities
 from infrastructure.document_processor import (
     extract_text,
-    extract_title,
-    get_manifest_info,
+    extract_title_type_jurisdiction,
+    upsert_manifest_record,
     sha256_text,
 )
 from infrastructure.chunker import chunk_doc
-# If you have a new retrieval path (Vertex AI Vector Search), wire it in here:
 from infrastructure.vector_search import find_nearest_neighbors
 from infrastructure.database import get_chunks_by_ids
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 logger = get_logger()
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
+GCS_DEFAULT_STORAGE_CLASS = "STANDARD"
+GCS_DEFAULT_LOCATION = "US"
+PROJECT_ID = os.getenv("VERTEX_PROJECT_ID", "tech-trans-rag")
+GCS_URI = os.getenv("GCS_URI", "gs://tx-rag-corpus")
+GCS_BUCKET = os.getenv("GCS_BUCKET", "tx-rag-corpus")
+MANIFEST_DOC = os.getenv("MANIFEST_DOC", "manifest/manifest.jsonl")
+CHUNKS_DOC = os.getenv("CHUNKS_DOC", "chunks/chunks.jsonl")
 
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def ensure_dir(path: str) -> None:
-    os.makedirs(path, exist_ok=True)
+def ensure_dir(bucket_name: str) -> Dict[str, Any]:
+    try:
+        client = storage.Client(project=PROJECT_ID)
+        bucket = client.bucket(bucket_name)
+        if not bucket.exists():
+            bucket.storage_class = GCS_DEFAULT_STORAGE_CLASS
+            new_bucket = client.create_bucket(bucket, location=GCS_DEFAULT_LOCATION)
+            logger.info("Created new bucket %s in %s with class %s", new_bucket.name, new_bucket.location, new_bucket.storage_class)
+            return {
+                "status": "created", 
+                "bucket": new_bucket.name,
+                "location": new_bucket.location
+            }
+        else:
+            logger.info("Bucket %s already exists", bucket_name)
+            return {
+                "status": "exists", 
+                "bucket": bucket_name,
+                "location": bucket.location,
+            }
+    except Exception as e:
+        logger.error("Failed to create directory %s: %s", bucket_name, e)
+        return {
+            "status": "error",
+            "error": str(e)
+        }
 
-def _upload_dirs():
-    base = os.getenv("UPLOAD_FOLDER", os.path.join(os.getcwd(), ".data/uploads"))
-    raw_dir = os.path.join(base, "raw")
-    clean_dir = os.path.join(base, "clean")
-    meta_dir = os.path.join(base, "metadata")
-    ensure_dir(raw_dir)
-    ensure_dir(clean_dir)
-    ensure_dir(meta_dir)
-    return raw_dir, clean_dir, meta_dir
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
 
 @api_bp.route("/upload", methods=["POST"])
 def add_doc():
@@ -84,35 +95,50 @@ def add_doc():
 
     logger.info("Received upload: filename=%s, doc_type=%s, jurisdiction=%s",
                 file.filename, doc_type, jurisdiction)
+    
+    client = storage.Client(project=PROJECT_ID)
+    bucket = client.bucket(GCS_BUCKET)
 
-    raw_dir, clean_dir, meta_dir = _upload_dirs()
-    logger.info("Upload directories: raw=%s, clean=%s, meta=%s", raw_dir, clean_dir, meta_dir)
-    filename = secure_filename(file.filename)
-    logger.info("Secured filename: %s", filename)
-    raw_path = os.path.join(raw_dir, filename)
-    logger.info("Saving uploaded file to %s", raw_path)
-    file.save(raw_path)
-    logger.info("File uploaded to %s", raw_path)
+    clean_text = extract_text(file=file)
+    content_sha = sha256_text(clean_text)
 
-    # Extract text and title
-    try:
-        text = extract_text(raw_path)
-        title = extract_title(text) or filename
-    except Exception as e:
-        logger.exception("Text extraction failed: %s", e)
-        return jsonify({"error": "Failed to extract text"}), 500
 
-    # Persist clean text to disk for transparency (optional)
-    clean_name = f"{os.path.splitext(filename)[0]}.txt"
-    clean_path = os.path.join(clean_dir, clean_name)
-    with open(clean_path, "w", encoding="utf-8") as f:
-        f.write(text)
-
-    # Compute content hash and upsert document row
-    content_sha = sha256_text(text)
     doc = get_document_by_sha(content_sha)
+    title = None
+    raw_blob_path = os.getenv("UPLOAD_FOLDER", "corpus_raw/") + file.filename
+    clean_blob_path = os.getenv("CLEAN_FOLDER", "corpus_clean/") + file.filename
+    doc_id_val = None
+
     if not doc:
-        doc = add_document(sha256=content_sha, title=title, source_path=raw_path, doc_type=doc_type, jurisdiction=jurisdiction)
+        filename = secure_filename(file.filename)
+        logger.info("Secured filename: %s", filename)
+        doc_info = extract_title_type_jurisdiction(clean_text)
+        title = doc_info.get("title") or file.filename.split('.')[0]
+        if not doc_type and "doc_type" in doc_info:
+            doc_type = doc_info.get("doc_type")
+        if not jurisdiction and "jurisdiction" in doc_info:
+            jurisdiction = doc_info.get("jurisdiction")
+        raw_blob = bucket.blob(raw_blob_path)
+        raw_blob.upload_from_file(file_obj=file, content_type=file.content_type)
+        logger.info("Uploaded raw file to GCS bucket %s as %s", bucket.name, raw_blob_path)
+
+        clean_blob = bucket.blob(clean_blob_path)
+        clean_blob.upload_from_string(clean_text, content_type="text/plain")
+        logger.info("Uploaded clean text to GCS bucket %s as %s", bucket.name, clean_blob_path)
+        doc = add_document(sha256=content_sha, title=title, source_path=raw_blob.public_url, doc_type=doc_type, jurisdiction=jurisdiction)
+
+        file.stream.seek(0)
+        size = file.stream.tell()
+        file.stream.seek(0)
+
+        header = file.steam.read(2048)
+        file.stream.seek(0)
+        kind = filetype.guess(header)
+        content_type = kind.mime if kind else 'application/octet-stream'
+
+        doc_id_val = getattr(doc, "doc_id", None)
+
+        upsert_manifest_record(text=clean_text, size=str(size), doc_id=str(doc_id_val) or "", source_path=raw_blob.public_url, clean_path=clean_blob.public_url, sha256=content_sha, title=title, jurisdiction=jurisdiction or "", doc_type=doc_type or "", content_type=content_type)
     else:
         # Enrich existing if metadata blank (add_document handles enrichment when doc exists)
         try:
@@ -120,37 +146,9 @@ def add_doc():
         except Exception:
             pass
 
-    if not doc:
-        logger.error("Failed to create or retrieve document for SHA: %s", content_sha)
-        return jsonify({"error": "Failed to process document in database"}), 500
-
-    # Ensure we have a concrete integer primary key (avoid Column / class attribute issues)
-    doc_id_val = getattr(doc, "doc_id", None)
-    if not isinstance(doc_id_val, int):
-        logger.error("Document record missing integer doc_id: %s", doc)
-        return jsonify({"error": "Invalid document id"}), 500
-
-    # Write manifest.jsonl record to local metadata dir for compatibility
-    manifest = get_manifest_info(text)
-    manifest_record = {
-        "doc_id": doc_id_val,
-        "title": title,
-        "sha256": content_sha,
-        "source_path": raw_path,
-        "clean_path": clean_path,
-        "bytes": os.path.getsize(raw_path),
-        "content_type": None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "manifest": manifest,
-    }
-    ensure_dir(os.path.join(meta_dir, str(doc_id_val)))
-    manifest_file = os.path.join(meta_dir, str(doc_id_val), "manifest.jsonl")
-    with open(manifest_file, "a", encoding="utf-8") as mf:
-        mf.write(json.dumps(manifest_record, ensure_ascii=False) + "\n")
-
     # Chunk now. Persist chunks into Postgres via add_chunk.
     try:
-        chunks = chunk_doc(file_path=clean_path, doc_id=str(doc_id_val))
+        chunks = chunk_doc(text=clean_text, doc_id=str(doc_id_val))
         # Expected `chunks` is iterable of dicts: {text, chunk_index, token_count?}
         persisted = 0
         for ch in chunks or []:
@@ -161,11 +159,10 @@ def add_doc():
             text_val = str(raw_text)
             idx = ch.get("chunk_index", persisted) if isinstance(ch, dict) else persisted
             tok = ch.get("token_count") if isinstance(ch, dict) else None
-            add_chunk(doc_id=doc_id_val, text=text_val, chunk_index=idx, token_count=tok)
+            add_chunk(doc_id=doc_id_val or 0, text=text_val, chunk_index=idx, token_count=tok)
             persisted += 1
     except Exception as e:
         logger.exception("Chunking failed: %s", e)
-        # Do not fail the upload if chunking fails. The worker can retry.
         pass
 
     return jsonify({
@@ -264,16 +261,83 @@ def list_all_chunks():
 @api_bp.route("/manifest", methods=["GET"])
 def get_manifest():
     """Return manifest.jsonl lines for a document if present on local storage for compatibility."""
-    doc_id = request.args.get("doc_id")
-    if not doc_id:
+
+    client = storage.Client(project=PROJECT_ID)
+    bucket = client.bucket(GCS_BUCKET) 
+    blob = bucket.blob(MANIFEST_DOC)
+    try:
+        content = blob.download_as_text(encoding="utf-8")
+    except NotFound:
+        return []
+
+    return jsonify(json.loads(content)), 200
+
+
+@api_bp.route("/manifest", methods=["PATCH"])
+def patch_manifest():
+    """Patch/update one manifest record by doc_id.
+
+    Request JSON: { "doc_id": <id>, "updates": { field: value, ... } }
+    Disallowed fields: doc_id, source_path (cannot be modified here).
+    Writes the full manifest JSON array back to GCS.
+    Returns: { "updated": record } or error.
+    """
+    payload = request.get_json(force=True) or {}
+    doc_id = payload.get("doc_id")
+    updates = payload.get("updates") or {}
+    if doc_id is None:
         return jsonify({"error": "doc_id required"}), 400
-    _, _, meta_dir = _upload_dirs()
-    path = os.path.join(meta_dir, str(doc_id), "manifest.jsonl")
-    if not os.path.exists(path):
-        return jsonify({"doc_id": int(doc_id), "manifest": []}), 200
-    with open(path, "r", encoding="utf-8") as f:
-        lines = [json.loads(x) for x in f.read().splitlines() if x.strip()]
-    return jsonify({"doc_id": int(doc_id), "manifest": lines}), 200
+    if not isinstance(updates, dict):
+        return jsonify({"error": "updates must be object"}), 400
+    # Prevent editing disallowed keys
+    for k in ["doc_id", "source_path"]:
+        if k in updates:
+            updates.pop(k, None)
+    if not updates:
+        return jsonify({"error": "no editable fields supplied"}), 400
+
+    client = storage.Client(project=PROJECT_ID)
+    bucket = client.bucket(GCS_BUCKET)
+    blob = bucket.blob(MANIFEST_DOC)
+    try:
+        raw = blob.download_as_text(encoding="utf-8")
+    except NotFound:
+        return jsonify({"error": "manifest not found"}), 404
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return jsonify({"error": "manifest unreadable"}), 500
+    if not isinstance(data, list):
+        return jsonify({"error": "manifest format invalid"}), 500
+
+    str_doc_id = str(doc_id)
+    updated_record = None
+    changed = False
+    for rec in data:
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("doc_id")) == str_doc_id:
+            # Apply updates
+            for k, v in updates.items():
+                old_val = rec.get(k)
+                if old_val != v:
+                    rec[k] = v
+                    changed = True
+            updated_record = rec
+            break
+
+    if not updated_record:
+        return jsonify({"error": "record not found"}), 404
+    if not changed:
+        return jsonify({"updated": updated_record, "changed": False}), 200
+
+    try:
+        blob.upload_from_string(json.dumps(data, ensure_ascii=False, indent=2), content_type="application/json")
+    except Exception as e:
+        logger.exception("Failed to write manifest: %s", e)
+        return jsonify({"error": "failed to persist manifest"}), 500
+
+    return jsonify({"updated": updated_record, "changed": True}), 200
 
 
 @api_bp.route("/embeddings/generate", methods=["POST"])

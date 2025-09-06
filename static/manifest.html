@@ -60,75 +60,79 @@
         .copy-btn { position:absolute; top:10px; right:10px; font-size:.55rem; padding:4px 8px; background:#2d3f4d; color:#fff; border:none; border-radius:6px; cursor:pointer; }
         .copy-btn:hover { background:#3d5566; }
         @media (max-width:800px){ .panel { padding:22px 20px; } h1 { font-size:1.7rem; } }
+        .pagination { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:12px; font-size:.65rem; }
+        .pagination button { padding:6px 10px; font-size:.65rem; background:#2d3f4d; color:#cfe9ff; box-shadow:none; }
+        .pagination button:disabled { opacity:.35; cursor:not-allowed; }
+        th.sortable { cursor:pointer; user-select:none; }
+        th.sortable:hover { background:#355064; }
+        th.sortable .indicator { font-size:.55rem; margin-left:4px; opacity:.8; }
+    tr.editing { background:#283745 !important; }
+    td.editable { cursor:text; }
+    td.editable:hover { background:#203240; }
+    .row-actions { display:flex; gap:6px; }
+    .row-actions button { padding:4px 10px; font-size:.6rem; background:#355064; color:#cfe9ff; }
+    .row-actions button.confirm { background:#4caf50; color:#fff; }
+    .row-actions button.cancel { background:#d9534f; color:#fff; }
     </style>
 </head>
 <body>
     <div class="shell">
         <div class="panel">
-            <h1>Documents & Manifests</h1>
-            <p class="sub">Default view lists documents from the database with basic metadata & chunk counts. Select a row or enter an ID to view its <code>manifest.jsonl</code> records from local storage (.data/uploads/metadata/&lt;doc_id&gt;/manifest.jsonl).</p>
-            <form id="queryForm" class="query" autocomplete="off" style="margin-bottom:10px;">
+            <h1>Global Manifest</h1>
+            <p class="sub">Viewing combined <code>manifest/manifest.jsonl</code> from bucket <code>tx-rag-corpus</code>. Columns represent extracted / enriched metadata for all documents. Client-side filter works across all loaded rows.</p>
+            <form id="filterForm" class="query" autocomplete="off" style="margin-bottom:10px;">
                 <div>
-                    <label for="docId">Document ID</label>
-                    <input type="number" id="docId" name="docId" min="1" required placeholder="e.g., 12" />
-                </div>
-                <div>
-                    <label for="filter">Text Filter (client)</label>
-                    <input type="text" id="filter" placeholder="Type to filter records" />
+                    <label for="filter">Text Filter</label>
+                    <input type="text" id="filter" placeholder="Type to filter rows" />
                 </div>
                 <div style="display:flex; gap:8px;">
-                    <button type="submit" id="fetchBtn">Fetch</button>
+                    <button type="button" id="refreshBtn">Refresh</button>
                     <button type="button" class="secondary" id="clearBtn">Clear</button>
                 </div>
             </form>
             <div class="status" id="status"></div>
         </div>
-
-        <div class="panel" id="documentsPanel">
+        <div class="panel" id="manifestPanel">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;flex-wrap:wrap;">
-                <h2 style="font-size:1.2rem;margin:0;">Documents</h2>
-                <div style="display:flex;gap:8px;align-items:center;">
-                    <label style="font-size:.6rem;letter-spacing:1px;">Limit</label>
-                    <input type="number" id="docLimit" value="100" min="10" max="500" style="width:90px;" />
-                    <button type="button" id="refreshDocs" style="padding:8px 14px;font-size:.7rem;">Refresh</button>
+                <h2 style="font-size:1.2rem;margin:0;">Manifest Entries</h2>
+                <div style="font-size:.65rem;letter-spacing:1px;color:#ccc;">Total: <span id="rowCount">0</span></div>
+            </div>
+            <div class="table-wrapper" id="manifestTableWrapper"></div>
+                <div class="pagination" id="pagination" style="display:none;">
+                    <button id="firstPage" title="First">⏮</button>
+                    <button id="prevPage" title="Previous">◀</button>
+                    <span>Page <span id="pageNum">1</span> / <span id="pageCount">1</span></span>
+                    <button id="nextPage" title="Next">▶</button>
+                    <button id="lastPage" title="Last">⏭</button>
+                    <span>| Rows: <span id="visibleCount">0</span> / <span id="totalCount">0</span></span>
                 </div>
-            </div>
-            <div class="table-wrapper" id="documentsTableWrapper" style="display:block;"></div>
-            <div class="status" id="docStatus"></div>
-        </div>
-
-        <div class="panel results" id="resultsPanel" style="display:none;margin-top:-10px;">
-            <div class="view-toggles">
-                <button type="button" id="cardsMode" class="active">Records</button>
-                <button type="button" id="tableMode">Table</button>
-                <button type="button" id="backToDocs" style="margin-left:auto;">Back to Documents</button>
-            </div>
-            <div class="meta-grid" id="metaGrid"></div>
-            <div class="records" id="records" style="display:block;"></div>
-            <div class="table-wrapper" id="tableWrapper" style="display:none;"></div>
         </div>
     </div>
 
     <script>
-        const qForm = document.getElementById('queryForm');
-        const docIdInput = document.getElementById('docId');
+        const filterForm = document.getElementById('filterForm');
         const filterInput = document.getElementById('filter');
         const statusEl = document.getElementById('status');
-        const metaGrid = document.getElementById('metaGrid');
-    const recordsEl = document.getElementById('records');
-    const tableWrapper = document.getElementById('tableWrapper');
-    const cardsModeBtn = document.getElementById('cardsMode');
-    const tableModeBtn = document.getElementById('tableMode');
-    const backToDocsBtn = document.getElementById('backToDocs');
-        const resultsPanel = document.getElementById('resultsPanel');
-    const documentsPanel = document.getElementById('documentsPanel');
-    const documentsTableWrapper = document.getElementById('documentsTableWrapper');
-    const docStatus = document.getElementById('docStatus');
-    const refreshDocsBtn = document.getElementById('refreshDocs');
-    const docLimitInput = document.getElementById('docLimit');
+        const refreshBtn = document.getElementById('refreshBtn');
         const clearBtn = document.getElementById('clearBtn');
-        const fetchBtn = document.getElementById('fetchBtn');
-        let rawRecords = []; // full list
+        const manifestTableWrapper = document.getElementById('manifestTableWrapper');
+        const rowCountEl = document.getElementById('rowCount');
+        let manifestRows = [];
+        const PAGE_SIZE = 25;
+        let currentPage = 1;
+        let sortCol = 'doc_id';
+        let sortDir = 'asc'; // 'asc' | 'desc'
+
+        // Pagination elements
+        const paginationEl = document.getElementById('pagination');
+        const firstPageBtn = document.getElementById('firstPage');
+        const prevPageBtn = document.getElementById('prevPage');
+        const nextPageBtn = document.getElementById('nextPage');
+        const lastPageBtn = document.getElementById('lastPage');
+        const pageNumEl = document.getElementById('pageNum');
+        const pageCountEl = document.getElementById('pageCount');
+        const visibleCountEl = document.getElementById('visibleCount');
+        const totalCountEl = document.getElementById('totalCount');
 
         function esc(v){
             return String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -146,155 +150,238 @@
             return `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`;
         }
 
-        function populateMeta(docId, arr){
-            metaGrid.innerHTML = '';
-            if (!arr.length){ return; }
-            // Use the most recent record (last line) for top-level summary
-            const last = arr[arr.length-1];
-            const keys = ["doc_id","title","sha256","bytes","content_type","created_at","doc_type","jurisdiction"];
-            keys.forEach(k=>{ if(k in last) metaGrid.insertAdjacentHTML('beforeend', buildMetaCard(k,last[k])); });
-        }
-
-        function filteredRecords(){
+        function filteredRows(){
             const term = filterInput.value.trim().toLowerCase();
-            return term ? rawRecords.filter(r => JSON.stringify(r).toLowerCase().includes(term)) : rawRecords;
+            if(!term) return manifestRows;
+            return manifestRows.filter(r => JSON.stringify(r).toLowerCase().includes(term));
         }
 
-        function renderRecords(){
-            const list = filteredRecords();
-            if(cardsModeBtn.classList.contains('active')){
-                if(!list.length){ recordsEl.innerHTML = '<div class="empty">No manifest entries match.</div>'; return; }
-                recordsEl.innerHTML = list.map((rec, idx) => {
-                    const label = rec.title || `Record ${idx+1}`;
-                    const badges = [];
-                    if(rec.doc_type) badges.push(`<span class='badge'>${esc(rec.doc_type)}</span>`);
-                    if(rec.jurisdiction) badges.push(`<span class='badge'>${esc(rec.jurisdiction)}</span>`);
-                    return `<div class='record'>
-                        <button class='copy-btn' data-copy='${esc(rec.sha256 || '')}' ${rec.sha256?"":"disabled"}>Copy SHA</button>
-                        <h3>${esc(label)}</h3>
-                        <div class='badge-row'>${badges.join('')}</div>
-                        <div class='json-view'>${esc(JSON.stringify(rec,null,2))}</div>
-                    </div>`;
-                }).join('');
-                attachCopyHandlers();
-            } else {
-                renderTable(list);
+            function compareValues(a, b){
+                // Attempt numeric compare if both parse to numbers
+                const an = parseFloat(a); const bn = parseFloat(b);
+                const aNum = !isNaN(an) && String(an) === String(a).trim();
+                const bNum = !isNaN(bn) && String(bn) === String(b).trim();
+                if(aNum && bNum){
+                    if(an < bn) return -1; if(an > bn) return 1; return 0;
+                }
+                const as = String(a).toLowerCase();
+                const bs = String(b).toLowerCase();
+                if(as < bs) return -1; if(as > bs) return 1; return 0;
             }
-        }
 
-        function renderTable(list){
-            if(!list.length){ tableWrapper.innerHTML = '<div class="empty">No manifest entries match.</div>'; return; }
-            const columns = ["doc_id","title","doc_type","jurisdiction","bytes","content_type","sha256","created_at"];
-            let html = '<table class="data-table"><thead><tr>' + columns.map(c=>`<th>${esc(c)}</th>`).join('') + '</tr></thead><tbody>';
-            html += list.map(r => '<tr>'+ columns.map(c => {
-                let val = r[c];
-                if(val == null) val='';
-                let display = String(val);
-                if(display.length>140) display = display.slice(0,140)+'…';
-                return `<td class="${display!==String(val)?'truncate':''}" title="${esc(String(val))}">${esc(display)}</td>`;
-            }).join('') + '</tr>').join('');
+            function sortRows(rows){
+                if(!sortCol) return rows;
+                return [...rows].sort((r1, r2) => {
+                    const v1 = r1[sortCol] ?? '';
+                    const v2 = r2[sortCol] ?? '';
+                    const cmp = compareValues(v1, v2);
+                    return sortDir === 'asc' ? cmp : -cmp;
+                });
+            }
+
+            function setSort(col){
+                if(sortCol === col){
+                    sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+                } else {
+                    sortCol = col;
+                    sortDir = 'asc';
+                }
+                currentPage = 1;
+                renderTable();
+            }
+
+            function buildHeader(cols){
+                return cols.map(c => {
+                    const active = c === sortCol;
+                    const indicator = active ? (sortDir === 'asc' ? '▲' : '▼') : '';
+                    return `<th class="sortable" data-col="${esc(c)}">${esc(c)}<span class="indicator">${indicator}</span></th>`;
+                }).join('');
+            }
+
+            function paginate(rows){
+                const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+                if(currentPage > pageCount) currentPage = pageCount;
+                const start = (currentPage - 1) * PAGE_SIZE;
+                const slice = rows.slice(start, start + PAGE_SIZE);
+                // Update controls
+                pageNumEl.textContent = String(currentPage);
+                pageCountEl.textContent = String(pageCount);
+                visibleCountEl.textContent = String(slice.length);
+                totalCountEl.textContent = String(rows.length);
+                firstPageBtn.disabled = currentPage === 1;
+                prevPageBtn.disabled = currentPage === 1;
+                nextPageBtn.disabled = currentPage === pageCount;
+                lastPageBtn.disabled = currentPage === pageCount;
+                paginationEl.style.display = rows.length ? 'flex' : 'none';
+                return slice;
+            }
+
+        function renderTable(){
+                const rows = sortRows(filteredRows());
+            rowCountEl.textContent = rows.length;
+                if(!rows.length){ manifestTableWrapper.innerHTML = '<div class="empty">No entries match.</div>'; paginationEl.style.display='none'; return; }
+                const cols = ["doc_id","title","doc_type","jurisdiction","governing_law","party_role","industry","effective_date","source_path"];
+                const pageRows = paginate(rows);
+                let html = '<table class="data-table"><thead><tr>' + buildHeader(cols) + '</tr></thead><tbody>';
+                html += pageRows.map(r => {
+                    const rid = esc(r.doc_id);
+                    let tds = cols.map(c => {
+                        let val = r[c];
+                        if(val == null) val = '';
+                        let full = String(val);
+                        let display = full;
+                        if(display.length > 160) display = display.slice(0,160)+'…';
+                        const nonEditable = (c === 'doc_id' || c === 'source_path');
+                        const cls = [display!==full?'truncate':'', nonEditable?'':'editable'].filter(Boolean).join(' ');
+                        return `<td data-col="${esc(c)}" data-doc="${rid}" class="${cls}" title="${esc(full)}">${esc(display)}</td>`;
+                    }).join('');
+                    // Actions placeholder cell appended
+                    return `<tr data-doc="${rid}">${tds}</tr>`;
+                }).join('');
             html += '</tbody></table>';
-            tableWrapper.innerHTML = html;
-        }
-
-        function attachCopyHandlers(){
-            recordsEl.querySelectorAll('.copy-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const val = btn.getAttribute('data-copy');
-                    if(!val) return;
-                    navigator.clipboard.writeText(val).then(()=>{
-                        btn.textContent = 'Copied';
-                        setTimeout(()=> btn.textContent = 'Copy SHA', 1500);
+            manifestTableWrapper.innerHTML = html;
+                // Header sort handlers
+                manifestTableWrapper.querySelectorAll('th.sortable').forEach(th => {
+                    th.addEventListener('click', () => {
+                        const col = th.getAttribute('data-col');
+                        if(col) setSort(col);
                     });
                 });
-            });
+                attachEditing();
         }
 
-        function fetchDocuments(){
-            const limit = Math.max(10, Math.min(500, parseInt(docLimitInput.value,10)||100));
-            docStatus.innerHTML = `<span class='inline'><span class='spinner'></span> Loading...</span>`;
-            fetch(`/api/documents?limit=${limit}`)
-              .then(r=>r.json())
-              .then(data => {
-                  const docs = Array.isArray(data.documents) ? data.documents : [];
-                  docStatus.textContent = docs.length ? `Loaded ${docs.length} document(s).` : 'No documents.';
-                  renderDocumentsTable(docs);
-              })
-              .catch(err => { docStatus.innerHTML = `<span class='error'>Failed: ${esc(err.message)}</span>`; });
-        }
-
-        function renderDocumentsTable(docs){
-            if(!docs.length){ documentsTableWrapper.innerHTML = '<div class="empty">No documents found.</div>'; return; }
-            const cols = ["doc_id","title","doc_type","jurisdiction","chunk_count","created_at","sha256"];
-            let html = '<table class="data-table"><thead><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead><tbody>';
-            html += docs.map(d=>'<tr data-doc="'+esc(d.doc_id)+'">'+cols.map(c=>{
-                let v=d[c]; if(v==null) v=''; let disp=String(v); if(disp.length>120) disp=disp.slice(0,120)+'…';
-                return `<td class="${disp!==String(v)?'truncate':''}" title="${esc(String(v))}">${esc(disp)}</td>`;
-            }).join('')+'</tr>').join('');
-            html+='</tbody></table>';
-            documentsTableWrapper.innerHTML=html;
-            documentsTableWrapper.querySelectorAll('tbody tr').forEach(tr=>{
-                tr.addEventListener('click',()=>{
-                    const did = tr.getAttribute('data-doc');
-                    if(did){ docIdInput.value = did; showManifestView(); fetchManifest(did); }
-                });
-            });
-        }
-
-        function showManifestView(){
-            documentsPanel.style.display='none';
-            resultsPanel.style.display='block';
-        }
-
-        function showDocuments(){
-            resultsPanel.style.display='none';
-            documentsPanel.style.display='block';
-        }
-
-        function fetchManifest(docId){
+        function fetchManifestAll(){
             spinner();
-            fetch(`/api/manifest?doc_id=${encodeURIComponent(docId)}`)
-                .then(r => r.json())
-                .then(data => {
-                    if(data.error){ setStatus(data.error, true); resultsPanel.style.display='none'; return; }
-                    rawRecords = Array.isArray(data.manifest) ? data.manifest : [];
-                    setStatus(rawRecords.length ? `Loaded ${rawRecords.length} record(s).` : 'No manifest entries.');
-                    populateMeta(docId, rawRecords);
-                    renderRecords();
-                    resultsPanel.style.display='block';
-                })
-                .catch(err => {
-                    setStatus('Failed to load manifest: '+ err.message, true);
-                    resultsPanel.style.display='none';
-                });
+            fetch('/api/manifest')
+              .then(r => r.json())
+              .then(data => {
+                  // Endpoint returns the parsed JSONL. Expect either array or object with manifest key.
+                  if(Array.isArray(data)) manifestRows = data;
+                  else if(Array.isArray(data.manifest)) manifestRows = data.manifest;
+                  else manifestRows = [];
+                  setStatus(manifestRows.length ? `Loaded ${manifestRows.length} entries.` : 'No manifest entries.');
+                  renderTable();
+              })
+              .catch(err => { setStatus('Failed to load manifest: ' + err.message, true); manifestRows = []; renderTable(); });
         }
 
-    filterInput.addEventListener('input', () => renderRecords());
-    cardsModeBtn.addEventListener('click', () => { if(cardsModeBtn.classList.contains('active')) return; cardsModeBtn.classList.add('active'); tableModeBtn.classList.remove('active'); recordsEl.style.display='block'; tableWrapper.style.display='none'; renderRecords(); });
-    tableModeBtn.addEventListener('click', () => { if(tableModeBtn.classList.contains('active')) return; tableModeBtn.classList.add('active'); cardsModeBtn.classList.remove('active'); recordsEl.style.display='none'; tableWrapper.style.display='block'; renderRecords(); });
+        filterInput.addEventListener('input', renderTable);
+        refreshBtn.addEventListener('click', fetchManifestAll);
+        clearBtn.addEventListener('click', () => { filterInput.value=''; currentPage=1; renderTable(); setStatus(''); });
+        firstPageBtn.addEventListener('click', () => { currentPage = 1; renderTable(); });
+        prevPageBtn.addEventListener('click', () => { if(currentPage>1){ currentPage--; renderTable(); } });
+        nextPageBtn.addEventListener('click', () => { currentPage++; renderTable(); });
+        lastPageBtn.addEventListener('click', () => { const rows = filteredRows(); currentPage = Math.max(1, Math.ceil(rows.length / PAGE_SIZE)); renderTable(); });
 
-        qForm.addEventListener('submit', e => {
-            e.preventDefault();
-            const id = docIdInput.value.trim();
-            if(!id){ setStatus('Document ID required', true); return; }
-            fetchManifest(id);
-        });
+        function attachEditing(){
+            manifestTableWrapper.querySelectorAll('td.editable').forEach(td => {
+                td.addEventListener('click', () => beginEdit(td));
+            });
+        }
 
-        clearBtn.addEventListener('click', () => {
-            docIdInput.value='';
-            filterInput.value='';
-            rawRecords=[]; metaGrid.innerHTML=''; recordsEl.innerHTML=''; resultsPanel.style.display='none'; setStatus('');
-        });
+        function beginEdit(td){
+            const tr = td.closest('tr');
+            if(tr.classList.contains('editing')) return; // one edit at a time per row
+            tr.classList.add('editing');
+            const docId = tr.getAttribute('data-doc');
+            const originalValues = {};
+            tr.querySelectorAll('td').forEach(cell => {
+                const col = cell.getAttribute('data-col');
+                if(!col) return;
+                originalValues[col] = cell.getAttribute('title') || cell.textContent || '';
+            });
+            tr.dataset.original = JSON.stringify(originalValues);
 
-    backToDocsBtn.addEventListener('click', showDocuments);
-    refreshDocsBtn.addEventListener('click', fetchDocuments);
-    docLimitInput.addEventListener('change', fetchDocuments);
+            // Make each editable cell an input
+            tr.querySelectorAll('td.editable').forEach(cell => {
+                const col = cell.getAttribute('data-col');
+                const val = originalValues[col];
+                cell.innerHTML = `<input type="text" style="width:100%;background:#16232d;border:1px solid #4a6578;color:#fff;font-size:.65rem;padding:4px 6px;border-radius:4px;" value="${esc(val)}" />`;
+            });
 
-    // Initial load: list documents unless doc_id pre-specified
-    const params = new URLSearchParams(window.location.search);
-    const qsId = params.get('doc_id');
-    if(qsId){ docIdInput.value = qsId; showManifestView(); fetchManifest(qsId); }
-    else { fetchDocuments(); }
+            // Append action buttons row-end: we'll add a new td spanning? Simpler: insert after last cell.
+            const colsCount = tr.querySelectorAll('td').length;
+            const actionsTd = document.createElement('td');
+            actionsTd.innerHTML = `<div class="row-actions"><button class="confirm">Save</button><button class="cancel">Cancel</button></div>`;
+            tr.appendChild(actionsTd);
+
+            actionsTd.querySelector('.confirm').addEventListener('click', () => confirmEdit(tr, docId));
+            actionsTd.querySelector('.cancel').addEventListener('click', () => cancelEdit(tr));
+        }
+
+        function cancelEdit(tr){
+            const orig = tr.dataset.original ? JSON.parse(tr.dataset.original) : {};
+            tr.innerHTML = '';
+            const cols = ["doc_id","title","doc_type","jurisdiction","governing_law","party_role","industry","effective_date","source_path"];
+            cols.forEach(c => {
+                const val = orig[c] ?? '';
+                const nonEditable = (c === 'doc_id' || c === 'source_path');
+                const display = val.length>160?val.slice(0,160)+'…':val;
+                const cls = [display!==val?'truncate':'', nonEditable?'':'editable'].filter(Boolean).join(' ');
+                const td = document.createElement('td');
+                td.setAttribute('data-col', c);
+                td.setAttribute('title', val);
+                td.className = cls;
+                td.textContent = display;
+                tr.appendChild(td);
+            });
+            tr.classList.remove('editing');
+            attachEditing();
+        }
+
+        function confirmEdit(tr, docId){
+            const orig = tr.dataset.original ? JSON.parse(tr.dataset.original) : {};
+            const updates = {};
+            tr.querySelectorAll('td').forEach(cell => {
+                const col = cell.getAttribute('data-col');
+                if(!col || col==='doc_id' || col==='source_path') return;
+                const input = cell.querySelector('input');
+                if(!input) return;
+                const newVal = input.value.trim();
+                if(orig[col] !== newVal){
+                    updates[col] = newVal;
+                }
+            });
+            if(Object.keys(updates).length === 0){
+                cancelEdit(tr);
+                return;
+            }
+            // Persist
+            setStatus('Saving…');
+            fetch('/api/manifest', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ doc_id: docId, updates })
+            }).then(r => r.json().then(j => ({ ok: r.ok, data: j })))
+              .then(res => {
+                  if(!res.ok){
+                      setStatus(res.data.error || 'Save failed', true);
+                      return;
+                  }
+                  // Update manifestRows entry
+                  const rec = manifestRows.find(r => String(r.doc_id) === String(docId));
+                  if(rec){ Object.entries(updates).forEach(([k,v]) => rec[k] = v); }
+                  setStatus('Saved.');
+                  cancelEdit(tr); // rebuild row from updated values
+                  // Re-apply updates for row display
+                  const rebuilt = manifestRows.find(r => String(r.doc_id) === String(docId));
+                  if(rebuilt){
+                      tr.querySelectorAll('td').forEach(td => {
+                          const col = td.getAttribute('data-col');
+                          if(!col) return;
+                          const val = rebuilt[col] ?? '';
+                          td.title = val;
+                          td.textContent = val.length>160?val.slice(0,160)+'…':val;
+                      });
+                  }
+              })
+              .catch(err => {
+                  setStatus('Save error: '+ err.message, true);
+              });
+        }
+
+        // Initial load
+        fetchManifestAll();
     </script>
 </body>
 </html>

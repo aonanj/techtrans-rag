@@ -189,7 +189,6 @@ def generate_embeddings(
                 sleep_for,
             )
             time.sleep(sleep_for)
-    return []
 
 
 def generate_embedding(

@@ -29,7 +29,9 @@ import os
 import re
 import json
 from pathlib import Path
-
+from openai import OpenAI
+from google.cloud import storage
+from google.api_core.exceptions import NotFound
 from .logger import get_logger
 from .vector_search import upsert_datapoints
 from .embeddings import generate_embeddings
@@ -47,13 +49,11 @@ logger = get_logger()
 
 API_KEY = os.getenv("OPENAI_API_KEY", "")
 
-# Optional embeddings import with fallback to avoid import errors
-try:
-	from .embeddings import generate_embeddings_for_chunks  # type: ignore
-except Exception:  # pragma: no cover
-	def generate_embeddings_for_chunks(texts):
-		logger.warning("Embeddings module unavailable; returning empty embeddings list")
-		return []
+API_KEY = os.getenv("OPENAI_API_KEY")
+PROJECT_ID = os.getenv("VERTEX_PROJECT_ID", "tech-trans-rag")
+GCS_BUCKET = os.getenv("GCS_BUCKET", "tx-rag-corpus")
+MANIFEST_DOC = os.getenv("MANIFEST_DOC", "manifest/manifest.jsonl")
+CHUNKS_DOC = os.getenv("CHUNKS_DOC", "chunks/chunks.jsonl")
 
 
 def _split_pages(text: str) -> List[str]:
@@ -72,28 +72,6 @@ def _paragraphs(page_text: str) -> List[str]:
 	"""Return logical paragraphs (double-newline or blank-line separated)."""
 	paras = re.split(r"\n{2,}", page_text)
 	return [p.strip() for p in paras if p.strip()]
-
-
-def _looks_like_heading(line: str) -> bool:
-	line_stripped = line.strip()
-	if not line_stripped:
-		return False
-	# Short & all caps (allow digits and basic punctuation)
-	if (len(line_stripped) <= 80 and
-		re.fullmatch(r"[A-Z0-9 .,'()/-]+", line_stripped) and
-		any(c.isalpha() for c in line_stripped)):
-		return True
-	# Title Case with few words
-	words = line_stripped.split()
-	if 1 <= len(words) <= 8 and all(w[:1].isupper() for w in words if w):
-		return True
-	return False
-
-
-def _derive_section(paragraph: str) -> str | None:
-	first_line = paragraph.splitlines()[0].strip()
-	return first_line if _looks_like_heading(first_line) else None
-
 
 
 def _chunk_paragraphs(paragraphs: List[Tuple[int, str]], max_chars: int, overlap: int) -> List[Tuple[str, int, int]]:
@@ -210,7 +188,82 @@ def _chunk_paragraphs_tokens(paragraphs: List[Tuple[int, str]], max_tokens: int,
 			chunks.append((chunk_text, min(buf_pages), max(buf_pages)))
 	return chunks
 
-def chunk_doc(file_path: str, doc_id: str, max_chars: int = 1200, overlap: int = 150, *, max_tokens: Optional[int] = None, token_overlap: Optional[int] = None) -> List[str]:
+def get_chunk_info(text: str, chunk_text: str) -> Dict[str, Optional[str]]:
+
+    try: 
+        client = OpenAI(api_key=API_KEY)
+        prompt = (
+            f"""
+            Examine the attached technology transactions document and the chunk taken from the document then identify respective values for each of the following keys: section_number (section(s), including subsection(s) and/or paragraph(s), applicable to the chunk), section_title (title, header, subheader, etc. applicable to this chunk), clause_type (the type(s) of clause(s) captured in this chunk), path (the section, including subsection(s) or paragraph(s) to the section_number for this chunk -- e.g., if section_number is 9.2(b) for the chunk, the path would be 9 → 9.2 → 9.2(b)), numbers_present (if this chunk includes a section_number in the chunk_text), and definition_terms (a list of all defined terms in this chunk). Consider the substantive meaning of words (e.g., "Page 1 of 12" is not likely to be the clause_type), placement in the document, surrounding text, applicable section, and any other factors that might inform your decision.
+            Return a response in following JSON format only: 
+            {{
+                "section_number": section_number, 
+                "section_title": section_title, 
+                "clause_type": clause_type, 
+                "path": path, 
+                "numbers_present": numbers_present, 
+                "definition_terms": [definition_terms]
+            }}. 
+            Do not return anything else outside of the JSON object. If you cannot identify a distinct value corresponding to one of the keys, respond with null for that key.
+            --- DOCUMENT TEXT START ---\n
+            {text}\n
+            --- DOCUMENT TEXT END ---\n\n
+			--- CHUNK TEXT START ---\n
+			{chunk_text}\n
+			--- CHUNK TEXT END ---
+            """
+        )
+
+        ai_model = "gpt-5-mini"
+
+        response = client.chat.completions.create(
+            model=ai_model,
+            messages=[
+                {"role": "system", "content": "Identify values for the following keys: section_number, section_title, clause_type, path, numbers_present, and definition_terms based on the following text.\n"},
+                {"role": "user", "content": prompt},
+            ]
+        )
+
+        response = response.choices[0].message.content if response.choices else []
+        logger.info(f"AI chunk raw response: {response}")
+        candidate = (response or [])
+        logger.info(f"AI chunk response: {candidate}")
+        expected_keys = [
+            "section_number",
+            "section_title",
+            "clause_type",
+            "path",
+            "numbers_present",
+            "definition_terms",
+        ]
+
+        data = {}
+        if isinstance(candidate, dict):
+            data = candidate
+        elif isinstance(candidate, str):
+            try:
+                data = json.loads(candidate)
+            except Exception:
+                logger.warning("AI manifest response not valid JSON; returning defaults")
+                data = {}
+        else:
+            logger.warning("AI manifest response unexpected type %s", type(candidate))
+
+        # Build normalized manifest dict
+        manifest = {k: (data.get(k) if isinstance(data, dict) else None) for k in expected_keys}
+
+        # Coerce obvious placeholder / unknown strings to None
+        for k, v in manifest.items():
+            if isinstance(v, str) and v.strip().lower() in {"unknown", "null", "n/a", "none", ""}:
+                manifest[k] = None
+
+        return manifest
+
+    except Exception as e:
+        logger.error(f"Error extracting values from text: {e}")
+        return {}
+
+def chunk_doc(text: str, doc_id: str, max_chars: int = 1200, overlap: int = 150, *, max_tokens: Optional[int] = None, token_overlap: Optional[int] = None) -> List[str]:
 	"""Chunk a cleaned text file, persist chunks, metadata, embeddings, and index.
 
 	Returns list of chunk IDs.
@@ -237,14 +290,6 @@ def chunk_doc(file_path: str, doc_id: str, max_chars: int = 1200, overlap: int =
 			logger.warning("overlap (%d) >= max_chars (%d); reducing overlap", overlap, max_chars)
 			overlap = max(0, max_chars // 4)  # soften
 
-	if not os.path.isfile(file_path):
-		raise FileNotFoundError(file_path)
-	if not file_path.lower().endswith(".txt"):
-		raise ValueError("chunk_doc currently expects a .txt file")
-
-	with open(file_path, "r", encoding="utf-8") as f:
-		raw = f.read()
-	text = normalize(raw)
 
 	pages = _split_pages(text)
 	logger.info("Chunking doc_id=%s pages=%d (max_chars=%d overlap=%d)", doc_id, len(pages), max_chars, overlap)
@@ -295,40 +340,17 @@ def chunk_doc(file_path: str, doc_id: str, max_chars: int = 1200, overlap: int =
 	except Exception as e:
 		logger.warning("Failed reading manifest metadata: %s", e)
 
-	def _extract_section_number_and_title(heading: str) -> Tuple[Optional[str], Optional[str]]:
-		# Patterns like '9.2 Title', 'Section 9.2 Title', '9 Title'
-		m = re.match(r'(?i)\s*(?:section\s+)?((?:\d+)(?:\.\d+)*)\s+(.{1,120})', heading.strip())
-		if m:
-			num = m.group(1)
-			title = m.group(2).strip()
-			# Strip trailing punctuation likely not part of title
-			title = title.rstrip(' .:-')
-			return num, title if title else None
-		return None, heading.strip() if heading else None
-
-	def _detect_definition_terms(text_block: str) -> List[str]:
-		terms = set()
-		# Quoted capitalized phrases
-		for m in re.finditer(r'"([A-Z][A-Za-z0-9 ]{1,40})"', text_block):
-			phrase = m.group(1).strip()
-			if len(phrase.split()) <= 5:
-				terms.add(phrase)
-		# Single ALLCAPS words (likely defined terms) length >=3
-		for m in re.finditer(r'\b([A-Z]{3,30})\b', text_block):
-			w = m.group(1)
-			if not w.isdigit() and w.upper() == w and w.lower() != w:
-				terms.add(w)
-		# Terms preceding "means" pattern
-		for m in re.finditer(r'\b([A-Z][A-Za-z0-9]{2,40})\b\s+means', text_block):
-			terms.add(m.group(1))
-		# Return sorted list for determinism
-		return sorted(terms)[:50]
-
 	chunk_metadata_records: List[Dict[str, Any]] = []
 
 	for idx, (chunk_text, page_s, page_e) in enumerate(chunk_specs):
-		heading = _derive_section(chunk_text)
-		sec_number, section_title = _extract_section_number_and_title(heading) if heading else (None, None)
+		
+		chunk_data = get_chunk_info(text, chunk_text)
+		sec_number = chunk_data.get("section_number")
+		section_title = chunk_data.get("section_title")
+		clause_type = chunk_data.get("clause_type")
+		path = chunk_data.get("path")
+		numbers_present = chunk_data.get("numbers_present")
+		definition_terms = chunk_data.get("definition_terms")
 
 
 		new_chunk = database.add_chunk(
@@ -343,6 +365,12 @@ def chunk_doc(file_path: str, doc_id: str, max_chars: int = 1200, overlap: int =
 		chunk_metadata_records.append({
 			'id': new_chunk.id,
 			'doc_id': doc_id,
+			'section_number': sec_number,
+			'section_title': section_title,
+			'clause_type': clause_type,
+			'path': path,
+			'numbers_present': numbers_present,
+			'definition_terms': definition_terms,
 			'text': chunk_text,
 			'metadata': {k: v for k, v in manifest_meta.items() if v is not None},
 			'prev_id': None,  # fill later
@@ -357,26 +385,22 @@ def chunk_doc(file_path: str, doc_id: str, max_chars: int = 1200, overlap: int =
 			rec['next_id'] = chunk_metadata_records[i+1]['id']
 
 	# Write / upsert JSONL file
+	client = storage.Client(project=PROJECT_ID)
+	bucket = client.bucket(GCS_BUCKET)
+	blob = bucket.blob(CHUNKS_DOC)
+	records = json.dumps(chunk_metadata_records, ensure_ascii=False, indent=0)
+
 	try:
-		metadata_dir = Path(os.getenv('METADATA_FOLDER', './data/metadata'))
-		metadata_dir.mkdir(parents=True, exist_ok=True)
-		chunks_jsonl = metadata_dir / 'chunks.jsonl'
-		existing: List[Dict[str, Any]] = []
-		if chunks_jsonl.exists():
-			with open(chunks_jsonl, 'r', encoding='utf-8') as cf:
-				for line in cf:
-					try:
-						obj = json.loads(line)
-						if obj.get('doc_id') != doc_id:  # drop existing lines for this doc_id
-							existing.append(obj)
-					except Exception:
-						continue
-		# Write updated file excluding old records for this doc_id and adding new ones
-		with open(chunks_jsonl, 'w', encoding='utf-8') as cf:
-			for obj in existing + chunk_metadata_records:
-				cf.write(json.dumps(obj, ensure_ascii=False) + '\n')
-	except Exception as e:
-		logger.warning("Failed to update chunks.jsonl for %s: %s", doc_id, e)
+		blob.reload()
+		current_gen = blob.generation
+		existing = blob.download_as_text(encoding='utf-8')
+		updated = existing + "\n" + records
+		blob.upload_from_string(updated, content_type="application/json", if_generation_match=current_gen)
+		logger.info(f"Appended {len(chunk_metadata_records)} chunk records to existing chunks file with generation {current_gen}")
+	except NotFound:
+		blob.upload_from_string(records, content_type="application/json", if_generation_match=0)
+		logger.info(f"Created new chunks file with {len(chunk_metadata_records)} records as it did not exist")
+
 	chunk_texts = [spec[0] for spec in chunk_specs]
 	# Generate embeddings and upsert to Vertex AI
 	try:
