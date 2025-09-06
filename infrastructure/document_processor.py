@@ -7,7 +7,7 @@ import re
 from PIL import Image
 import pytesseract
 import hashlib
-from docx import Document
+import docx
 from google.cloud import storage
 from google.api_core.exceptions import NotFound
 from typing import Optional, Dict
@@ -135,7 +135,7 @@ def extract_pdf_text(file: FileStorage):
 
 def extract_docx_text(file: FileStorage):
     file.stream.seek(0)
-    doc = Document(file.stream)
+    doc = docx.Document(file.stream)
     text = [p.text for p in doc.paragraphs]
     raw = "\n".join(text)
     return normalize(raw)
