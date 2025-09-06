@@ -120,6 +120,7 @@ def get_manifest_info(text: str) -> Dict[str, Optional[str]]:
 def extract_pdf_text(file: FileStorage):
     file.stream.seek(0)
     text_parts = []
+    logger.info("Extracting text from PDF")
     with fitz.open(stream=file.stream.read(), filetype="pdf") as doc:
         for page in doc:
             text = page.get_text("text")
@@ -132,10 +133,12 @@ def extract_pdf_text(file: FileStorage):
                 text_parts.append(ocr_text)
             text_parts.append("\n\n\f\n\n")  # Page break
     raw = "\n\n\f\n\n".join(text_parts).strip()
+    doc.close()
     return normalize(raw)
 
 def extract_docx_text(file: FileStorage):
     file.stream.seek(0)
+    logger.info("Extracting text from DOCX")
     doc = docx.Document(file.stream)
     text = [p.text for p in doc.paragraphs]
     raw = "\n".join(text)
