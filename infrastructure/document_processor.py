@@ -163,7 +163,7 @@ def extract_title_type_jurisdiction(text: str) -> Dict[str, Optional[str]]:
         prompt = (
             f"""
             Examine the attached legal document, which is a technology transactions document, and then identify the title, type of technology transactions document (e.g., IP agreement, NDA, license, MSA, etc.), and jurisdiction. Use an accepted legal abbreviation for the jurisdiction (e.g., US-CA, US-FED, FRG, etc.). If you are unable to identify the jurisdiction, use the governing law, if available. Consider the substantive meaning of words (e.g., "Page 1 of 12" is not likely to be the title), placement in the document, case of the letters, length, punctuation, justification, and any other factors that might inform your decision. If you cannot confidently identify a distinct value for any field, respond with null. Return only a JSON object, with no other characters outside the JSON object. The JSON object should have the following keys: title, doc_type, jurisdiction. For example: 
-            {{"title": [title], "doc_type": [doc_type], "jurisdiction": [jurisdiction]}}.
+            {{"title": title, "doc_type": doc_type, "jurisdiction": jurisdiction}}.
             --- PAGE TEXT START ---\n
             {text}\n
             --- PAGE TEXT END ---

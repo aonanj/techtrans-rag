@@ -222,6 +222,7 @@ def add_document(*, sha256, title=None, source_path=None, doc_type=None, jurisdi
     with session_scope() as s:
         doc = s.query(Document).filter_by(sha256=sha256).one_or_none()
         if doc:
+            _logger.info("Document with sha256 %s already exists (doc_id=%s); checking for metadata enrichment", sha256, doc.doc_id)
             updated = False
             if doc_type and not getattr(doc, "doc_type", None):
                 doc.doc_type = doc_type
@@ -229,19 +230,21 @@ def add_document(*, sha256, title=None, source_path=None, doc_type=None, jurisdi
             if jurisdiction and not getattr(doc, "jurisdiction", None):
                 doc.jurisdiction = jurisdiction
                 updated = True
-            if industry and not getattr(doc, "industry", None):
+            if industry:
                 doc.industry = industry
                 updated = True
-            if party_roles and not getattr(doc, "party_roles", None):
+            if party_roles:
                 doc.party_roles = party_roles
                 updated = True
-            if governing_law and not getattr(doc, "governing_law", None):
+            if governing_law:
                 doc.governing_law = governing_law
                 updated = True
-            if effective_date and not getattr(doc, "effective_date", None):
+            if effective_date:
                 doc.effective_date = effective_date
                 updated = True
             if updated:
+                _logger.info("Document metadata enriched for doc_id=%s", doc.doc_id)
+                s.merge(doc)    
                 s.flush()
             return doc
         doc = Document(sha256=sha256, title=title, source_path=source_path, doc_type=doc_type, jurisdiction=jurisdiction, industry=industry, party_roles=party_roles, governing_law=governing_law, created_at=datetime.now(timezone.utc))

@@ -28,7 +28,6 @@ from typing import List, Tuple, Optional, Dict, Any, Iterable
 import os
 import re
 import json
-from pathlib import Path
 from openai import OpenAI
 from google.cloud import storage
 from google.api_core.exceptions import NotFound
@@ -315,30 +314,7 @@ def chunk_doc(text: str, doc_id: str, max_chars: int = 1200, overlap: int = 150,
 	db_session = db
 	chunk_ids: List[str] = []
 
-	# Preload manifest metadata; only include these keys in output metadata
-	manifest_meta: Dict[str, Optional[str]] = {
-		"doc_type": None,
-		"party_roles": None,
-		"jurisdiction": None,
-		"governing_law": None,
-		"industry": None,
-	}
-	try:
-		manifest_path = Path(os.getenv('METADATA_FOLDER', './data/metadata')) / 'manifest.jsonl'
-		if manifest_path.exists():
-			with open(manifest_path, 'r', encoding='utf-8') as mf:
-				for line in mf:
-					try:
-						rec = json.loads(line)
-						if rec.get('doc_id') == doc_id:
-							for k in manifest_meta.keys():
-								if k in rec:
-									manifest_meta[k] = rec.get(k)
-							break
-					except Exception:  # skip malformed lines
-						continue
-	except Exception as e:
-		logger.warning("Failed reading manifest metadata: %s", e)
+		
 
 	chunk_metadata_records: List[Dict[str, Any]] = []
 
@@ -377,7 +353,7 @@ def chunk_doc(text: str, doc_id: str, max_chars: int = 1200, overlap: int = 150,
 			'numbers_present': numbers_present,
 			'definition_terms': definition_terms,
 			'text': chunk_text,
-			'metadata': {k: v for k, v in manifest_meta.items() if v is not None},
+			'metadata': None,
 			'prev_id': None,  # fill later
 			'next_id': None,  # fill later
 		})
