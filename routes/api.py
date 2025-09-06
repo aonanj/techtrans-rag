@@ -133,7 +133,7 @@ def add_doc():
         size = file.stream.tell()
         file.stream.seek(0)
 
-        header = file.steam.read(2048)
+        header = file.stream.read(2048)
         file.stream.seek(0)
         kind = filetype.guess(header)
         content_type = kind.mime if kind else 'application/octet-stream'
