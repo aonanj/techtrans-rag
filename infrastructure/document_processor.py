@@ -10,7 +10,7 @@ import hashlib
 import docx
 from google.cloud import storage
 from google.api_core.exceptions import NotFound
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 import json
 from werkzeug.datastructures import FileStorage
 from datetime import datetime, timezone
@@ -50,12 +50,12 @@ def get_manifest_info(text: str) -> Dict[str, Optional[str]]:
         client = OpenAI(api_key=API_KEY)
         prompt = (
             f"""
-            Examine the attached technology transactions document and then identify respective values for each of the following keys: source_url (url of the document), license, type of technology transactions document (doc_type, use only one or two words, use abbreviations where appropriate), the role of the party or parties (use only the roles, e.g., licensor, licensee; do not include the names of the parties), the jurisdiction, the governing law, the industry (use only one or two words), and the effective date of the agreement. Consider the substantive meaning of words (e.g., "Page 1 of 12" is not likely to be the license), placement in the document, surrounding text, applicable section, and any other factors that might inform your decision. Use standard legal abbreviations for the jurisdiction and governing law (e.g., US-CA for California state law, US-FED for US federal law, etc.). Format the date in a string "YYYY-MM-DD".
+            Examine the attached technology transactions document and then identify respective values for each of the following keys: source_url (url of the document), license, type of technology transactions document (doc_type, use only one or two words, use abbreviations where appropriate), the role(s) of the party or parties (use only the roles, e.g., licensor, licensee; do not include the names of the parties), the jurisdiction, the governing law, the industry (use only one or two words), and the effective date of the agreement. Consider the substantive meaning of words (e.g., "Page 1 of 12" is not likely to be the license), placement in the document, surrounding text, applicable section, and any other factors that might inform your decision. Use standard legal abbreviations for the jurisdiction and governing law (e.g., US-CA for California state law, US-FED for US federal law, etc.). Format the date in a string "YYYY-MM-DD".
             Return a response in following JSON format only: 
             {{
                 "source_url": source_url, 
                 "license": license, 
-                "party_role": party_role, 
+                "party_roles": party_roles, 
                 "governing_law": governing_law, 
                 "industry": industry, 
                 "effective_date": effective_date
@@ -84,7 +84,7 @@ def get_manifest_info(text: str) -> Dict[str, Optional[str]]:
         expected_keys = [
             "source_url",
             "license",
-            "party_role",
+            "party_roles",
             "governing_law",
             "industry",
             "effective_date",
@@ -241,7 +241,7 @@ def sha256_text(text: str) -> str:
     """Compute the SHA-256 hash of a text string."""
     return sha256_bytes(text.encode('utf-8'))
 
-def upsert_manifest_record(text: str, size: str, doc_id: str, sha256: str, source_path: str, clean_path: str, content_type: str, title: str, jurisdiction: str, doc_type: str) -> None:
+def upsert_manifest_record(text: str, size: str, doc_id: str, sha256: str, source_path: str, clean_path: str, content_type: str, title: str, jurisdiction: str, doc_type: str) -> Dict[str, Optional[Any]]:
     """Upsert a manifest record in the database."""
     
     manifest = get_manifest_info(text)
@@ -255,7 +255,7 @@ def upsert_manifest_record(text: str, size: str, doc_id: str, sha256: str, sourc
         "content_type": content_type,
         "license": manifest.get("license"),
         "doc_type": doc_type,
-        "party_role": manifest.get("party_role"),
+        "party_roles": manifest.get("party_roles"),
         "jurisdiction": jurisdiction,
         "governing_law": manifest.get("governing_law"),
         "industry": manifest.get("industry"),
@@ -279,3 +279,5 @@ def upsert_manifest_record(text: str, size: str, doc_id: str, sha256: str, sourc
     except NotFound:
         blob.upload_from_string(line, content_type="application/jsonl", if_generation_match=0)
         logger.info(f"Created new manifest record as manifest did not exist: {manifest_record}")
+
+    return manifest_record

@@ -120,10 +120,14 @@ class Document(Base):
     title = Column(String(512), nullable=True)
     source_path = Column(Text, nullable=True)
     sha256 = Column(String(64), nullable=False, unique=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc), nullable=False)
     # Optional metadata filters
     doc_type = Column(String(128), nullable=True)
-    jurisdiction = Column(String(64), nullable=True)
+    jurisdiction = Column(String(128), nullable=True)
+    governing_law = Column(String(128), nullable=True)
+    party_roles = Column(String(256), nullable=True)
+    industry = Column(String(128), nullable=True)
+    effective_date = Column(DateTime, nullable=True)
 
     chunks = relationship("Chunk", cascade="all, delete-orphan", back_populates="document")
 
@@ -134,7 +138,9 @@ class Chunk(Base):
     chunk_index = Column(Integer, nullable=False)  # position within the doc
     page_start = Column(Integer, nullable=True)
     page_end = Column(Integer, nullable=True)
-    section = Column(Text, nullable=True)
+    section_number = Column(Text, nullable=True)
+    section_title = Column(Text, nullable=True)
+    clause_type = Column(String(256), nullable=True)
     text = Column(Text, nullable=False)
     token_count = Column(Integer, nullable=True)
     tok_ver = Column(Integer, default=TOK_VER, nullable=False)
@@ -207,7 +213,7 @@ def session_scope():
         session.close()
 
 # --------------- CRUD ---------------
-def add_document(*, sha256, title=None, source_path=None, doc_type=None, jurisdiction=None):
+def add_document(*, sha256, title=None, source_path=None, doc_type=None, jurisdiction=None, industry=None, party_roles=None, governing_law=None, effective_date=None):
     """Insert a document if absent; return Document.
 
     If the document already exists, optionally update metadata fields if they are currently null
@@ -223,21 +229,34 @@ def add_document(*, sha256, title=None, source_path=None, doc_type=None, jurisdi
             if jurisdiction and not getattr(doc, "jurisdiction", None):
                 doc.jurisdiction = jurisdiction
                 updated = True
+            if industry and not getattr(doc, "industry", None):
+                doc.industry = industry
+                updated = True
+            if party_roles and not getattr(doc, "party_roles", None):
+                doc.party_roles = party_roles
+                updated = True
+            if governing_law and not getattr(doc, "governing_law", None):
+                doc.governing_law = governing_law
+                updated = True
+            if effective_date and not getattr(doc, "effective_date", None):
+                doc.effective_date = effective_date
+                updated = True
             if updated:
                 s.flush()
             return doc
-        doc = Document(sha256=sha256, title=title, source_path=source_path, doc_type=doc_type, jurisdiction=jurisdiction, created_at=datetime.now(timezone.utc))
+        doc = Document(sha256=sha256, title=title, source_path=source_path, doc_type=doc_type, jurisdiction=jurisdiction, industry=industry, party_roles=party_roles, governing_law=governing_law, created_at=datetime.now(timezone.utc))
         s.add(doc)
         s.flush()
         return doc
 
 def add_chunk(doc_id: int, chunk_id: str, text: str, chunk_index: int, token_count: int | None = None,
-              page_start: int | None = None, page_end: int | None = None, section: str | None = None,
-              tok_ver: int = TOK_VER, seg_ver: int = SEG_VER):
+              page_start: int | None = None, page_end: int | None = None, section_number: str | None = None,
+              section_title: str | None = None, clause_type: str | None = None, tok_ver: int = TOK_VER, seg_ver: int = SEG_VER):
     with session_scope() as s:
         ch = Chunk(doc_id=doc_id, chunk_id=chunk_id, text=text, chunk_index=chunk_index,
                    token_count=token_count, tok_ver=tok_ver, seg_ver=seg_ver,
-                   page_start=page_start, page_end=page_end, section=section)
+                   page_start=page_start, page_end=page_end, section_number=section_number,
+                   section_title=section_title, clause_type=clause_type)
         s.add(ch)
         s.flush()
         return ch

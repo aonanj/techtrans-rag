@@ -318,7 +318,7 @@ def chunk_doc(text: str, doc_id: str, max_chars: int = 1200, overlap: int = 150,
 	# Preload manifest metadata; only include these keys in output metadata
 	manifest_meta: Dict[str, Optional[str]] = {
 		"doc_type": None,
-		"party_role": None,
+		"party_roles": None,
 		"jurisdiction": None,
 		"governing_law": None,
 		"industry": None,
@@ -361,7 +361,9 @@ def chunk_doc(text: str, doc_id: str, max_chars: int = 1200, overlap: int = 150,
 			text=chunk_text,
 			page_start=page_s,
 			page_end=page_e,
-			section=sec_number,
+			section_number=sec_number,
+			section_title=section_title,
+			clause_type=clause_type,
 		)
 		chunk_ids.append(chunk_id)
 		chunk_metadata_records.append({

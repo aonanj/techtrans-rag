@@ -220,7 +220,7 @@
                 const rows = sortRows(filteredRows());
             rowCountEl.textContent = rows.length;
                 if(!rows.length){ manifestTableWrapper.innerHTML = '<div class="empty">No entries match.</div>'; paginationEl.style.display='none'; return; }
-                const cols = ["doc_id","title","doc_type","jurisdiction","governing_law","party_role","industry","effective_date","source_path"];
+                const cols = ["doc_id","title","doc_type","jurisdiction","governing_law","party_roles","industry","effective_date","source_path"];
                 const pageRows = paginate(rows);
                 let html = '<table class="data-table"><thead><tr>' + buildHeader(cols) + '</tr></thead><tbody>';
                 html += pageRows.map(r => {
@@ -233,7 +233,10 @@
                         if(display.length > 160) display = display.slice(0,160)+'…';
                         const nonEditable = (c === 'doc_id' || c === 'source_path');
                         const cls = [display!==full?'truncate':'', nonEditable?'':'editable'].filter(Boolean).join(' ');
-                        return `<td data-col="${esc(c)}" data-doc="${rid}" class="${cls}" title="${esc(full)}">${esc(display)}</td>`;
+                        const content = (c === 'source_path' && val)
+                            ? `<a href="${esc(val)}" target="_blank" rel="noopener noreferrer">${esc(display)}</a>`
+                            : esc(display);
+                        return `<td data-col="${esc(c)}" data-doc="${rid}" class="${cls}" title="${esc(full)}">${content}</td>`;
                     }).join('');
                     // Actions placeholder cell appended
                     return `<tr data-doc="${rid}">${tds}</tr>`;
@@ -312,7 +315,7 @@
         function cancelEdit(tr){
             const orig = tr.dataset.original ? JSON.parse(tr.dataset.original) : {};
             tr.innerHTML = '';
-            const cols = ["doc_id","title","doc_type","jurisdiction","governing_law","party_role","industry","effective_date","source_path"];
+            const cols = ["doc_id","title","doc_type","jurisdiction","governing_law","party_roles","industry","effective_date","source_path"];
             cols.forEach(c => {
                 const val = orig[c] ?? '';
                 const nonEditable = (c === 'doc_id' || c === 'source_path');
@@ -322,7 +325,11 @@
                 td.setAttribute('data-col', c);
                 td.setAttribute('title', val);
                 td.className = cls;
-                td.textContent = display;
+                if (c === 'source_path' && val) {
+                    td.innerHTML = `<a href="${esc(val)}" target="_blank" rel="noopener noreferrer">${esc(display)}</a>`;
+                } else {
+                    td.textContent = display;
+                }
                 tr.appendChild(td);
             });
             tr.classList.remove('editing');

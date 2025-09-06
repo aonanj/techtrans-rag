@@ -123,10 +123,12 @@ def add_doc():
         raw_blob = bucket.blob(raw_blob_path)
         file.stream.seek(0)
         raw_blob.upload_from_file(file_obj=file, content_type=file.mimetype)
+        raw_blob.make_public()
         logger.info("Uploaded raw file to GCS bucket %s as %s", bucket.name, raw_blob_path)
 
         clean_blob = bucket.blob(clean_blob_path)
         clean_blob.upload_from_string(clean_text, content_type="text/plain")
+        clean_blob.make_public()
         logger.info("Uploaded clean text to GCS bucket %s as %s", bucket.name, clean_blob_path)
         doc = add_document(sha256=content_sha, title=title, source_path=raw_blob.public_url, doc_type=doc_type, jurisdiction=jurisdiction)
 
@@ -141,7 +143,14 @@ def add_doc():
 
         doc_id_val = getattr(doc, "doc_id", None)
 
-        upsert_manifest_record(text=clean_text, size=str(size), doc_id=str(doc_id_val) or "", source_path=raw_blob.public_url, clean_path=clean_blob.public_url, sha256=content_sha, title=title, jurisdiction=jurisdiction or "", doc_type=doc_type or "", content_type=content_type)
+        manifest_record = upsert_manifest_record(text=clean_text, size=str(size), doc_id=str(doc_id_val) or "", source_path=raw_blob.public_url, clean_path=clean_blob.public_url, sha256=content_sha, title=title, jurisdiction=jurisdiction or "", doc_type=doc_type or "", content_type=content_type)
+
+        logger.info("Upserted manifest record: %s", manifest_record)
+        governing_law = manifest_record.get("governing_law")
+        party_roles = manifest_record.get("party_roles")
+        industry = manifest_record.get("industry")
+        effective_date = manifest_record.get("effective_date")
+        doc = add_document(sha256=content_sha, governing_law=governing_law, party_roles=party_roles, industry=industry, effective_date=effective_date)
     else:
         # Enrich existing if metadata blank (add_document handles enrichment when doc exists)
         try:
