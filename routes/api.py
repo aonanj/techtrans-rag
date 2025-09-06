@@ -120,7 +120,8 @@ def add_doc():
         if not jurisdiction and "jurisdiction" in doc_info:
             jurisdiction = doc_info.get("jurisdiction")
         raw_blob = bucket.blob(raw_blob_path)
-        raw_blob.upload_from_file(file_obj=file, content_type=file.content_type)
+        file.stream.seek(0)
+        raw_blob.upload_from_file(file_obj=file, content_type=file.mimetype)
         logger.info("Uploaded raw file to GCS bucket %s as %s", bucket.name, raw_blob_path)
 
         clean_blob = bucket.blob(clean_blob_path)
