@@ -131,7 +131,7 @@ def add_doc():
         logger.info("Uploaded clean text to GCS bucket %s as %s", bucket.name, clean_blob_path)
         doc = add_document(sha256=content_sha, title=title, source_path=raw_blob.public_url, doc_type=doc_type, jurisdiction=jurisdiction)
 
-        file.stream.seek(0)
+        file.stream.seek(0, 2)
         size = file.stream.tell()
         file.stream.seek(0)
 
