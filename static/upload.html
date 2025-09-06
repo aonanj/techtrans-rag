@@ -421,7 +421,7 @@
                     const title = responseJson.title ? `Title: ${responseJson.title}` : '';
                     const dtEcho = responseJson.doc_type ? `Type: ${responseJson.doc_type}` : '';
                     const jurEcho = responseJson.jurisdiction ? `Jurisdiction: ${responseJson.jurisdiction}` : '';
-                    const msgParts = ['Document uploaded successfully!', docId, title, dtEcho, jurEcho, sha].filter(Boolean);
+                    const msgParts = ['Document uploaded successfully.', docId, title, dtEcho, jurEcho].filter(Boolean);
                     showResult(msgParts.join(' — '), 'success');
                     // Keep note about indexing in case embeddings are generated async
                     const indexingNote = document.createElement('div');

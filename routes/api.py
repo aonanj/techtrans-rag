@@ -17,6 +17,7 @@ from infrastructure.database import (
     get_documents,
     get_document_chunk_counts,
     get_all_chunks,
+    Document,
 )
 from infrastructure.embeddings import generate_and_store_embeddings, find_nearest_neighbors_advanced
 from infrastructure.document_processor import (
@@ -123,12 +124,10 @@ def add_doc():
         raw_blob = bucket.blob(raw_blob_path)
         file.stream.seek(0)
         raw_blob.upload_from_file(file_obj=file, content_type=file.mimetype)
-        raw_blob.make_public()
         logger.info("Uploaded raw file to GCS bucket %s as %s", bucket.name, raw_blob_path)
 
         clean_blob = bucket.blob(clean_blob_path)
         clean_blob.upload_from_string(clean_text, content_type="text/plain")
-        clean_blob.make_public()
         logger.info("Uploaded clean text to GCS bucket %s as %s", bucket.name, clean_blob_path)
         doc = add_document(sha256=content_sha, title=title, source_path=raw_blob.public_url, doc_type=doc_type, jurisdiction=jurisdiction)
 
@@ -333,9 +332,17 @@ def patch_manifest():
 
     try:
         blob.upload_from_string(json.dumps(data, ensure_ascii=False, indent=2), content_type="application/json")
+        # Also update the database record
+        if updated_record and "sha256" in updated_record:
+            sha256 = updated_record["sha256"]
+            db_updates = {k: v for k, v in updates.items() if hasattr(Document, k)}
+            if db_updates:
+                add_document(sha256=sha256, **db_updates)
+                logger.info("Enriched document %s in database with new metadata.", doc_id)
+
     except Exception as e:
-        logger.exception("Failed to write manifest: %s", e)
-        return jsonify({"error": "failed to persist manifest"}), 500
+        logger.exception("Failed to write manifest or update database: %s", e)
+        return jsonify({"error": "failed to persist changes"}), 500
 
     return jsonify({"updated": updated_record, "changed": True}), 200
 
