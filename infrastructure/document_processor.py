@@ -118,8 +118,9 @@ def get_manifest_info(text: str) -> Dict[str, Optional[str]]:
 
 
 def extract_pdf_text(file: FileStorage):
+    file.stream.seek(0)
     text_parts = []
-    with fitz.open(stream=file.read(), filetype="pdf") as doc:
+    with fitz.open(stream=file.stream.read(), filetype="pdf") as doc:
         for page in doc:
             text = page.get_text("text")
             if text.strip():
@@ -142,10 +143,11 @@ def extract_docx_text(file: FileStorage):
 
 def extract_text(file: FileStorage) -> str:
     filename = file.filename or ""
+    file.stream.seek(0)
     _, ext = os.path.splitext(filename.lower())
 
     if ext == ".txt":
-        return normalize(file.read().decode('utf-8'))
+        return normalize(file.stream.read().decode('utf-8'))
     if ext == ".pdf":
         return extract_pdf_text(file)
     elif ext == ".docx":

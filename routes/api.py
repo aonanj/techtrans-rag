@@ -106,7 +106,8 @@ def add_doc():
     title = None
     raw_blob_path = os.getenv("UPLOAD_FOLDER", "corpus_raw/") + file.filename
     logger.info("Raw blob path: %s", raw_blob_path)
-    clean_blob_path = os.getenv("CLEAN_FOLDER", "corpus_clean/") + file.filename
+    txt_filename = file.filename.rsplit('.', 1)[0] + '.txt'
+    clean_blob_path = os.getenv("CLEAN_FOLDER", "corpus_clean/") + txt_filename
     logger.info("Clean blob path: %s", clean_blob_path)
     doc_id_val = None
 
