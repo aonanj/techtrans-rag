@@ -133,7 +133,6 @@ def extract_pdf_text(file: FileStorage):
                 text_parts.append(ocr_text)
             text_parts.append("\n\n\f\n\n")  # Page break
     raw = "\n\n\f\n\n".join(text_parts).strip()
-    doc.close()
     return normalize(raw)
 
 def extract_docx_text(file: FileStorage):
