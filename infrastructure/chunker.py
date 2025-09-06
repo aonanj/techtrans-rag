@@ -51,7 +51,7 @@ API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 API_KEY = os.getenv("OPENAI_API_KEY")
 PROJECT_ID = os.getenv("VERTEX_PROJECT_ID", "tech-trans-rag")
-GCS_BUCKET = os.getenv("GCS_BUCKET", "tx-rag-corpus")
+GCS_BUCKET = os.getenv("GCS_BUCKET", "tech-trans-rag-bucket")
 MANIFEST_DOC = os.getenv("MANIFEST_DOC", "manifest/manifest.jsonl")
 CHUNKS_DOC = os.getenv("CHUNKS_DOC", "chunks/chunks.jsonl")
 
@@ -352,18 +352,21 @@ def chunk_doc(text: str, doc_id: str, max_chars: int = 1200, overlap: int = 150,
 		numbers_present = chunk_data.get("numbers_present")
 		definition_terms = chunk_data.get("definition_terms")
 
+		chunk_id = f"{doc_iden}::{idx}"
 
 		new_chunk = database.add_chunk(
 			doc_id=int(doc_iden),
+			chunk_id=chunk_id,
 			chunk_index=idx,
 			text=chunk_text,
 			page_start=page_s,
 			page_end=page_e,
 			section=sec_number,
 		)
-		chunk_ids.append(new_chunk.id)
+		chunk_ids.append(chunk_id)
 		chunk_metadata_records.append({
-			'id': new_chunk.id,
+			'id': chunk_id,
+			'index': idx,
 			'doc_id': doc_id,
 			'section_number': sec_number,
 			'section_title': section_title,
@@ -380,9 +383,9 @@ def chunk_doc(text: str, doc_id: str, max_chars: int = 1200, overlap: int = 150,
 	# Link prev/next
 	for i, rec in enumerate(chunk_metadata_records):
 		if i > 0:
-			rec['prev_id'] = chunk_metadata_records[i-1]['id']
+			rec['prev_id'] = chunk_metadata_records[i-1]['index']
 		if i < len(chunk_metadata_records) - 1:
-			rec['next_id'] = chunk_metadata_records[i+1]['id']
+			rec['next_id'] = chunk_metadata_records[i+1]['index']
 
 	# Write / upsert JSONL file
 	client = storage.Client(project=PROJECT_ID)

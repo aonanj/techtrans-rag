@@ -24,7 +24,7 @@ Notes:
 import os
 import contextlib
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Text, DateTime, ForeignKey, LargeBinary, Index, text, func
@@ -129,7 +129,7 @@ class Document(Base):
 
 class Chunk(Base):
     __tablename__ = "chunks"
-    chunk_id = Column(Integer, primary_key=True, autoincrement=True)
+    chunk_id = Column(Text, primary_key=True)
     doc_id = Column(Integer, ForeignKey("documents.doc_id", ondelete="CASCADE"), nullable=False, index=True)
     chunk_index = Column(Integer, nullable=False)  # position within the doc
     page_start = Column(Integer, nullable=True)
@@ -150,7 +150,7 @@ class Chunk(Base):
 class Embedding(Base):
     __tablename__ = "embeddings"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    chunk_id = Column(Integer, ForeignKey("chunks.chunk_id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    chunk_id = Column(Text, ForeignKey("chunks.chunk_id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
     model = Column(String(128), nullable=False)
     dim = Column(Integer, nullable=False)
     # Store raw vectors for provenance; ANN search is handled by Vertex AI Vector Search
@@ -226,23 +226,23 @@ def add_document(*, sha256, title=None, source_path=None, doc_type=None, jurisdi
             if updated:
                 s.flush()
             return doc
-        doc = Document(sha256=sha256, title=title, source_path=source_path, doc_type=doc_type, jurisdiction=jurisdiction)
+        doc = Document(sha256=sha256, title=title, source_path=source_path, doc_type=doc_type, jurisdiction=jurisdiction, created_at=datetime.now(timezone.utc))
         s.add(doc)
         s.flush()
         return doc
 
-def add_chunk(doc_id: int, text: str, chunk_index: int, token_count: int | None = None,
+def add_chunk(doc_id: int, chunk_id: str, text: str, chunk_index: int, token_count: int | None = None,
               page_start: int | None = None, page_end: int | None = None, section: str | None = None,
               tok_ver: int = TOK_VER, seg_ver: int = SEG_VER):
     with session_scope() as s:
-        ch = Chunk(doc_id=doc_id, text=text, chunk_index=chunk_index,
+        ch = Chunk(doc_id=doc_id, chunk_id=chunk_id, text=text, chunk_index=chunk_index,
                    token_count=token_count, tok_ver=tok_ver, seg_ver=seg_ver,
                    page_start=page_start, page_end=page_end, section=section)
         s.add(ch)
         s.flush()
         return ch
 
-def upsert_embedding(chunk_id: int, model: str, dim: int, vector_bytes: bytes):
+def upsert_embedding(chunk_id: str, model: str, dim: int, vector_bytes: bytes):
     with session_scope() as s:
         emb = s.query(Embedding).filter_by(chunk_id=chunk_id).one_or_none()
         if emb:

@@ -19,7 +19,7 @@ logger = get_logger()
 
 API_KEY = os.getenv("OPENAI_API_KEY")
 PROJECT_ID = os.getenv("VERTEX_PROJECT_ID", "tech-trans-rag")
-GCS_BUCKET = os.getenv("GCS_BUCKET", "tx-rag-corpus")
+GCS_BUCKET = os.getenv("GCS_BUCKET", "tech-trans-rag-bucket")
 MANIFEST_DOC = os.getenv("MANIFEST_DOC", "manifest/manifest.jsonl")
 CHUNKS_DOC = os.getenv("CHUNKS_DOC", "chunks/chunks.jsonl")
 

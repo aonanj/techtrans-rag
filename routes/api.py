@@ -12,7 +12,6 @@ from infrastructure.logger import get_logger
 from infrastructure.database import (
     init_db,
     add_document,
-    add_chunk,
     get_document_by_sha,
     get_chunks_for_doc,
     get_documents,
@@ -37,8 +36,8 @@ ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
 GCS_DEFAULT_STORAGE_CLASS = "STANDARD"
 GCS_DEFAULT_LOCATION = "US"
 PROJECT_ID = os.getenv("VERTEX_PROJECT_ID", "tech-trans-rag")
-GCS_URI = os.getenv("GCS_URI", "gs://tx-rag-corpus")
-GCS_BUCKET = os.getenv("GCS_BUCKET", "tx-rag-corpus")
+GCS_URI = os.getenv("GCS_URI", "gs://tech-trans-rag-bucket")
+GCS_BUCKET = os.getenv("GCS_BUCKET", "tech-trans-rag-bucket")
 MANIFEST_DOC = os.getenv("MANIFEST_DOC", "manifest/manifest.jsonl")
 CHUNKS_DOC = os.getenv("CHUNKS_DOC", "chunks/chunks.jsonl")
 
@@ -106,7 +105,9 @@ def add_doc():
     doc = get_document_by_sha(content_sha)
     title = None
     raw_blob_path = os.getenv("UPLOAD_FOLDER", "corpus_raw/") + file.filename
+    logger.info("Raw blob path: %s", raw_blob_path)
     clean_blob_path = os.getenv("CLEAN_FOLDER", "corpus_clean/") + file.filename
+    logger.info("Clean blob path: %s", clean_blob_path)
     doc_id_val = None
 
     if not doc:
@@ -149,18 +150,6 @@ def add_doc():
     # Chunk now. Persist chunks into Postgres via add_chunk.
     try:
         chunks = chunk_doc(text=clean_text, doc_id=str(doc_id_val))
-        # Expected `chunks` is iterable of dicts: {text, chunk_index, token_count?}
-        persisted = 0
-        for ch in chunks or []:
-            raw_text = ch.get("text") if isinstance(ch, dict) else ch
-            if raw_text is None:
-                # Skip chunks without text to satisfy type requirements
-                continue
-            text_val = str(raw_text)
-            idx = ch.get("chunk_index", persisted) if isinstance(ch, dict) else persisted
-            tok = ch.get("token_count") if isinstance(ch, dict) else None
-            add_chunk(doc_id=doc_id_val or 0, text=text_val, chunk_index=idx, token_count=tok)
-            persisted += 1
     except Exception as e:
         logger.exception("Chunking failed: %s", e)
         pass
